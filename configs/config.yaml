@@ -1,0 +1,20 @@
+defaults:
+  - model: transformer
+  - data: default
+  - training: default
+
+project_name: pose_estimator_25d
+seed: 42
+
+# Paths
+paths:
+  data_root: ./data
+  output_dir: ./outputs
+  checkpoint_dir: ./outputs/checkpoints
+  log_dir: ./outputs/logs
+
+# Wandb
+wandb:
+  project: pose_estimator_25d
+  entity: null  # Set to your wandb username/team
+  mode: online  # online, offline, disabled

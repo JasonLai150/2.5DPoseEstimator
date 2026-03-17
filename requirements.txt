@@ -1,0 +1,8 @@
+torch>=2.0
+torchvision
+wandb
+numpy
+scipy
+einops
+tqdm
+pyyaml
