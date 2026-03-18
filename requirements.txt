@@ -6,3 +6,5 @@ scipy
 einops
 tqdm
 pyyaml
+h5py
+cdflib
