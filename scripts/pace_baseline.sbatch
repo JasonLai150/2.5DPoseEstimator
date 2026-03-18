@@ -8,7 +8,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
-#SBATCH --partition=gpu
+#SBATCH --partition=coc-gpu
+#SBATCH --account=coc
 
 # PACE/ICE Baseline Training Script
 # Usage: sbatch scripts/pace_baseline.sbatch
@@ -28,9 +29,6 @@ source activate pose_env
 # Create logs directory if needed
 mkdir -p logs
 mkdir -p checkpoints
-
-# Set environment variables
-export CUDA_VISIBLE_DEVICES=0
 
 # Print GPU info
 nvidia-smi
