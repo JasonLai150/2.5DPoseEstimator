@@ -22,11 +22,13 @@ echo "============================================"
 
 # Load modules
 module load anaconda3
+module load cuda/11.8
 
-# Activate environment
-source activate pose_env
+# Initialize conda properly for batch jobs
+eval "$(conda shell.bash hook)"
+conda activate pose_env
 
-# Create logs directory if needed
+# Create directories
 mkdir -p logs
 mkdir -p checkpoints
 
