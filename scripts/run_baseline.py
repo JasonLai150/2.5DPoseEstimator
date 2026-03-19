@@ -64,54 +64,36 @@ def compute_mpjpe(pred, target, valid=None):
 
 
 def compute_p_mpjpe(pred, target, valid=None):
-    """
-    Compute Procrustes-aligned MPJPE (P-MPJPE).
-
-    Aligns predicted pose to ground truth via Procrustes analysis
-    before computing error. This removes global rotation/translation/scale.
-    """
+    """Compute Procrustes-aligned MPJPE (batched)."""
     pred_mm = pred * 1000
     target_mm = target * 1000
-
-    # Flatten batch and time
     B, T, J, _ = pred_mm.shape
-    pred_flat = pred_mm.reshape(-1, J, 3)
-    target_flat = target_mm.reshape(-1, J, 3)
 
-    errors = []
-    for i in range(len(pred_flat)):
-        p = pred_flat[i].cpu().numpy()
-        t = target_flat[i].cpu().numpy()
+    p = pred_mm.reshape(-1, J, 3).cpu().numpy()
+    t = target_mm.reshape(-1, J, 3).cpu().numpy()
 
-        # Center
-        p_centered = p - p.mean(axis=0)
-        t_centered = t - t.mean(axis=0)
+    p_centered = p - p.mean(axis=1, keepdims=True)
+    t_centered = t - t.mean(axis=1, keepdims=True)
 
-        # Scale
-        p_scale = np.sqrt((p_centered ** 2).sum())
-        t_scale = np.sqrt((t_centered ** 2).sum())
+    p_scale = np.sqrt((p_centered ** 2).sum(axis=(1, 2), keepdims=True)) + 1e-8
+    t_scale = np.sqrt((t_centered ** 2).sum(axis=(1, 2), keepdims=True)) + 1e-8
 
-        p_normalized = p_centered / (p_scale + 1e-8)
-        t_normalized = t_centered / (t_scale + 1e-8)
+    p_norm = p_centered / p_scale
+    t_norm = t_centered / t_scale
 
-        # Rotation (Procrustes)
-        H = p_normalized.T @ t_normalized
-        U, S, Vt = np.linalg.svd(H)
-        R = Vt.T @ U.T
+    H = np.einsum('nij,nik->njk', p_norm, t_norm)
+    U, S, Vt = np.linalg.svd(H)
+    R = np.einsum('nij,nkj->nik', Vt, U)
 
-        # Handle reflection
-        if np.linalg.det(R) < 0:
-            Vt[-1, :] *= -1
-            R = Vt.T @ U.T
+    det = np.linalg.det(R)
+    Vt[det < 0, -1, :] *= -1
+    R = np.einsum('nij,nkj->nik', Vt, U)
 
-        # Align
-        p_aligned = (p_normalized @ R) * t_scale + t.mean(axis=0)
+    t_mean = t.mean(axis=1, keepdims=True)
+    p_aligned = np.einsum('nij,nkj->nki', R, p_norm) * t_scale + t_mean
+    errors = np.sqrt(((p_aligned - t) ** 2).sum(axis=-1)).mean(axis=-1)
 
-        # Error
-        error = np.sqrt(((p_aligned - t) ** 2).sum(axis=-1)).mean()
-        errors.append(error)
-
-    return np.mean(errors)
+    return errors.mean()
 
 
 def train_epoch(model, loader, optimizer, criterion, device):

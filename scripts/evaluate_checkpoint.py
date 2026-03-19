@@ -41,33 +41,42 @@ def compute_mpjpe(pred, target, valid=None):
 
 
 def compute_p_mpjpe(pred, target, valid=None):
-    """Compute Procrustes-aligned MPJPE."""
+    """Compute Procrustes-aligned MPJPE (batched)."""
     pred_mm = pred * 1000
     target_mm = target * 1000
     B, T, J, _ = pred_mm.shape
-    pred_flat = pred_mm.reshape(-1, J, 3)
-    target_flat = target_mm.reshape(-1, J, 3)
 
-    errors = []
-    for i in range(len(pred_flat)):
-        p = pred_flat[i].cpu().numpy()
-        t = target_flat[i].cpu().numpy()
-        p_centered = p - p.mean(axis=0)
-        t_centered = t - t.mean(axis=0)
-        p_scale = np.sqrt((p_centered ** 2).sum())
-        t_scale = np.sqrt((t_centered ** 2).sum())
-        p_normalized = p_centered / (p_scale + 1e-8)
-        t_normalized = t_centered / (t_scale + 1e-8)
-        H = p_normalized.T @ t_normalized
-        U, S, Vt = np.linalg.svd(H)
-        R = Vt.T @ U.T
-        if np.linalg.det(R) < 0:
-            Vt[-1, :] *= -1
-            R = Vt.T @ U.T
-        p_aligned = (p_normalized @ R) * t_scale + t.mean(axis=0)
-        error = np.sqrt(((p_aligned - t) ** 2).sum(axis=-1)).mean()
-        errors.append(error)
-    return np.mean(errors)
+    # Flatten batch and time, move to numpy once
+    p = pred_mm.reshape(-1, J, 3).cpu().numpy()   # (N, J, 3)
+    t = target_mm.reshape(-1, J, 3).cpu().numpy()
+
+    # Batched centering
+    p_centered = p - p.mean(axis=1, keepdims=True)
+    t_centered = t - t.mean(axis=1, keepdims=True)
+
+    # Batched scale
+    p_scale = np.sqrt((p_centered ** 2).sum(axis=(1, 2), keepdims=True)) + 1e-8
+    t_scale = np.sqrt((t_centered ** 2).sum(axis=(1, 2), keepdims=True)) + 1e-8
+
+    p_norm = p_centered / p_scale
+    t_norm = t_centered / t_scale
+
+    # Batched SVD via einsum: H = p_norm^T @ t_norm for each sample
+    H = np.einsum('nij,nik->njk', p_norm, t_norm)  # (N, 3, 3)
+    U, S, Vt = np.linalg.svd(H)
+    R = np.einsum('nij,nkj->nik', Vt, U)  # (N, 3, 3) = Vt^T @ U^T
+
+    # Fix reflections
+    det = np.linalg.det(R)
+    Vt[det < 0, -1, :] *= -1
+    R = np.einsum('nij,nkj->nik', Vt, U)
+
+    # Align and compute error
+    t_mean = t.mean(axis=1, keepdims=True)
+    p_aligned = np.einsum('nij,nkj->nki', R, p_norm) * t_scale + t_mean
+    errors = np.sqrt(((p_aligned - t) ** 2).sum(axis=-1)).mean(axis=-1)  # (N,)
+
+    return errors.mean()
 
 
 @torch.no_grad()
