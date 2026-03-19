@@ -319,7 +319,7 @@ def main():
     print("="*60)
 
     # Load best model
-    checkpoint = torch.load(args.save_path, map_location=device)
+    checkpoint = torch.load(args.save_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
 
     print("\nEvaluating on H36M Test...")
