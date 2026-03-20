@@ -1,0 +1,3 @@
+[submodule "external/imar_tools"]
+	path = external/imar_tools
+	url = https://github.com/sminchisescu-research/imar_vision_datasets_tools.git
