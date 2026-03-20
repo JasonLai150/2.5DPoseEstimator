@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-Evaluate a saved checkpoint on H36M and MPI-INF-3DHP.
+Evaluate a saved checkpoint on H36M and/or Fit3D.
 
 Usage:
+    # H36M only
     python scripts/evaluate_checkpoint.py --checkpoint checkpoints/baseline_videopose.pt
+
+    # H36M + Fit3D
+    python scripts/evaluate_checkpoint.py --checkpoint checkpoints/baseline_videopose.pt \
+        --fit3d_root ./data/processed/fit3d
 """
 
 import argparse
@@ -12,18 +17,17 @@ from pathlib import Path
 import torch
 import numpy as np
 from tqdm import tqdm
+from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.processed_dataset import create_dataloader
+from src.data.processed_dataset import ProcessedPoseDataset, create_dataloader
 from src.models.videopose import VideoPose3D
 
 
 class SimpleConfig:
-    """Simple config object for model initialization."""
     def __init__(self, **kwargs):
         self.model = type('obj', (object,), {})()
-        self.data = type('obj', (object,), {})()
         for k, v in kwargs.get('model', {}).items():
             setattr(self.model, k, v)
         self.model.get = lambda key, default=None: getattr(self.model, key, default)
@@ -35,8 +39,8 @@ def compute_mpjpe(pred, target, valid=None):
     target_mm = target * 1000
     error = torch.sqrt(((pred_mm - target_mm) ** 2).sum(dim=-1))
     if valid is not None:
-        valid = valid.unsqueeze(-1).expand_as(error)
-        error = error[valid]
+        valid_exp = valid.unsqueeze(-1).expand_as(error)
+        error = error[valid_exp]
     return error.mean().item()
 
 
@@ -46,69 +50,70 @@ def compute_p_mpjpe(pred, target, valid=None):
     target_mm = target * 1000
     B, T, J, _ = pred_mm.shape
 
-    # Flatten batch and time, move to numpy once
-    p = pred_mm.reshape(-1, J, 3).cpu().numpy()   # (N, J, 3)
+    p = pred_mm.reshape(-1, J, 3).cpu().numpy()
     t = target_mm.reshape(-1, J, 3).cpu().numpy()
 
-    # Batched centering
     p_centered = p - p.mean(axis=1, keepdims=True)
     t_centered = t - t.mean(axis=1, keepdims=True)
 
-    # Batched scale
     p_scale = np.sqrt((p_centered ** 2).sum(axis=(1, 2), keepdims=True)) + 1e-8
     t_scale = np.sqrt((t_centered ** 2).sum(axis=(1, 2), keepdims=True)) + 1e-8
 
     p_norm = p_centered / p_scale
     t_norm = t_centered / t_scale
 
-    # Batched SVD via einsum: H = p_norm^T @ t_norm for each sample
-    H = np.einsum('nij,nik->njk', p_norm, t_norm)  # (N, 3, 3)
+    H = np.einsum('nij,nik->njk', p_norm, t_norm)
     U, S, Vt = np.linalg.svd(H)
-    R = np.einsum('nij,nkj->nik', Vt, U)  # (N, 3, 3) = Vt^T @ U^T
+    R = np.einsum('nij,nkj->nik', Vt, U)
 
-    # Fix reflections
     det = np.linalg.det(R)
     Vt[det < 0, -1, :] *= -1
     R = np.einsum('nij,nkj->nik', Vt, U)
 
-    # Align and compute error
     t_mean = t.mean(axis=1, keepdims=True)
     p_aligned = np.einsum('nij,nkj->nki', R, p_norm) * t_scale + t_mean
-    errors = np.sqrt(((p_aligned - t) ** 2).sum(axis=-1)).mean(axis=-1)  # (N,)
+    errors = np.sqrt(((p_aligned - t) ** 2).sum(axis=-1)).mean(axis=-1)
 
     return errors.mean()
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, dataset_name=""):
-    """Evaluate model on a dataset."""
+def evaluate(model, loader, device, name=""):
     model.eval()
-    all_mpjpe = []
-    all_p_mpjpe = []
+    all_mpjpe, all_p_mpjpe = [], []
 
-    for batch in tqdm(loader, desc=f"Evaluating {dataset_name}"):
+    for batch in tqdm(loader, desc=f"Evaluating {name}"):
         poses_2d = batch['poses_2d'].to(device)
         poses_3d = batch['poses_3d'].to(device)
-        valid = batch.get('valid', None)
+        valid = batch.get('valid')
         if valid is not None:
             valid = valid.to(device)
 
         pred_3d = model(poses_2d)
-        mpjpe = compute_mpjpe(pred_3d, poses_3d, valid)
-        p_mpjpe = compute_p_mpjpe(pred_3d, poses_3d, valid)
-        all_mpjpe.append(mpjpe)
-        all_p_mpjpe.append(p_mpjpe)
+        all_mpjpe.append(compute_mpjpe(pred_3d, poses_3d, valid))
+        all_p_mpjpe.append(compute_p_mpjpe(pred_3d, poses_3d, valid))
 
-    return {
-        'mpjpe': np.mean(all_mpjpe),
-        'p_mpjpe': np.mean(all_p_mpjpe),
-    }
+    return {'mpjpe': np.mean(all_mpjpe), 'p_mpjpe': np.mean(all_p_mpjpe)}
+
+
+def make_loader(data_root, dataset, split, batch_size, seq_len):
+    ds = ProcessedPoseDataset(
+        data_root=data_root,
+        dataset=dataset,
+        split=split,
+        seq_len=seq_len,
+        stride=seq_len,
+    )
+    return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate checkpoint")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/baseline_videopose.pt")
-    parser.add_argument("--data_root", type=str, default="./data/processed")
+    parser.add_argument("--data_root", type=str, default="./data/processed",
+                        help="Root for H36M processed data")
+    parser.add_argument("--fit3d_root", type=str, default=None,
+                        help="Root for Fit3D processed data (e.g. ./data/processed/fit3d)")
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--seq_len", type=int, default=27)
     args = parser.parse_args()
@@ -119,23 +124,15 @@ def main():
     # Load checkpoint
     print(f"\nLoading checkpoint: {args.checkpoint}")
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    ckpt_cfg = checkpoint.get('config', {})
+    seq_len = ckpt_cfg.get('seq_len', args.seq_len)
 
-    # Get config from checkpoint
-    ckpt_config = checkpoint.get('config', {})
-    hidden_dim = ckpt_config.get('hidden_dim', 1024)
-    num_blocks = ckpt_config.get('num_blocks', 4)
-    seq_len = ckpt_config.get('seq_len', args.seq_len)
-
-    # Create model
     cfg = SimpleConfig(model={
-        'num_joints': 17,
-        'input_dim': 2,
-        'output_dim': 3,
+        'num_joints': 17, 'input_dim': 2, 'output_dim': 3,
         'seq_len': seq_len,
-        'hidden_dim': hidden_dim,
-        'num_blocks': num_blocks,
-        'kernel_size': 3,
-        'drop_rate': 0.25,
+        'hidden_dim': ckpt_cfg.get('hidden_dim', 1024),
+        'num_blocks': ckpt_cfg.get('num_blocks', 4),
+        'kernel_size': 3, 'drop_rate': 0.25,
     })
 
     model = VideoPose3D(cfg)
@@ -143,53 +140,38 @@ def main():
     model = model.to(device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Create dataloaders
+    # Build loaders
     print("\nLoading datasets...")
-    h36m_test_loader = create_dataloader(
-        data_root=args.data_root,
-        dataset="h36m",
-        split="test",
-        batch_size=args.batch_size,
-        seq_len=seq_len,
-        stride=seq_len,
-        shuffle=False,
-    )
-    print(f"H36M Test: {len(h36m_test_loader.dataset)} samples")
+    loaders = {}
 
-    mpi_test_loader = create_dataloader(
-        data_root=args.data_root,
-        dataset="mpi_3dhp",
-        split="test",
-        batch_size=args.batch_size,
-        seq_len=seq_len,
-        stride=seq_len,
-        shuffle=False,
-    )
-    print(f"MPI-INF-3DHP Test: {len(mpi_test_loader.dataset)} samples")
+    h36m_loader = make_loader(args.data_root, "h36m", "test", args.batch_size, seq_len)
+    print(f"H36M Test:  {len(h36m_loader.dataset)} samples")
+    loaders["H36M"] = h36m_loader
+
+    if args.fit3d_root:
+        fit3d_loader = make_loader(args.fit3d_root, "", "test", args.batch_size, seq_len)
+        print(f"Fit3D Test: {len(fit3d_loader.dataset)} samples")
+        loaders["Fit3D"] = fit3d_loader
 
     # Evaluate
     print("\n" + "="*60)
-    print("EVALUATION RESULTS")
-    print("="*60)
+    results = {}
+    for name, loader in loaders.items():
+        results[name] = evaluate(model, loader, device, name)
 
-    print("\nEvaluating on H36M Test...")
-    h36m_metrics = evaluate(model, h36m_test_loader, device, "H36M")
-
-    print("\nEvaluating on MPI-INF-3DHP Test (cross-dataset)...")
-    mpi_metrics = evaluate(model, mpi_test_loader, device, "MPI-INF-3DHP")
-
+    # Print summary
     print("\n" + "="*60)
-    print("BASELINE RESULTS")
+    print("RESULTS SUMMARY")
     print("="*60)
-    print(f"\nHuman3.6M (in-domain):")
-    print(f"  MPJPE:   {h36m_metrics['mpjpe']:.2f} mm")
-    print(f"  P-MPJPE: {h36m_metrics['p_mpjpe']:.2f} mm")
+    for name, metrics in results.items():
+        label = "(in-domain)" if name == "H36M" else "(target domain)"
+        print(f"\n{name} {label}:")
+        print(f"  MPJPE:   {metrics['mpjpe']:.2f} mm")
+        print(f"  P-MPJPE: {metrics['p_mpjpe']:.2f} mm")
 
-    print(f"\nMPI-INF-3DHP (cross-dataset):")
-    print(f"  MPJPE:   {mpi_metrics['mpjpe']:.2f} mm")
-    print(f"  P-MPJPE: {mpi_metrics['p_mpjpe']:.2f} mm")
-
-    print(f"\nDomain gap: {mpi_metrics['mpjpe'] - h36m_metrics['mpjpe']:.2f} mm")
+    if "H36M" in results and "Fit3D" in results:
+        gap = results["Fit3D"]["mpjpe"] - results["H36M"]["mpjpe"]
+        print(f"\nDomain gap (H36M -> Fit3D): {gap:.2f} mm")
 
 
 if __name__ == "__main__":
