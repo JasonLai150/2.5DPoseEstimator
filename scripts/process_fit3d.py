@@ -23,9 +23,31 @@ from tqdm import tqdm
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent.parent / 'external' / 'imar_tools'))
 
-from util.dataset_util import read_cam_params, project_3d_to_2d
+
+# Inlined from external/imar_tools/util/dataset_util.py to avoid cv2 dependency
+def read_cam_params(cam_path):
+    with open(cam_path) as f:
+        cam_params = json.load(f)
+    for key1 in cam_params:
+        for key2 in cam_params[key1]:
+            cam_params[key1][key2] = np.array(cam_params[key1][key2])
+    return cam_params
+
+
+def project_3d_to_2d(points3d, intrinsics, intrinsics_type):
+    if intrinsics_type == 'w_distortion':
+        p = intrinsics['p'][:, [1, 0]]
+        x = points3d[:, :2] / points3d[:, 2:3]
+        r2 = np.sum(x**2, axis=1)
+        radial = 1 + np.transpose(np.matmul(intrinsics['k'], np.array([r2, r2**2, r2**3])))
+        tan = np.matmul(x, np.transpose(p))
+        xx = x * (tan + radial) + r2[:, np.newaxis] * p
+        proj = intrinsics['f'] * xx + intrinsics['c']
+    elif intrinsics_type == 'wo_distortion':
+        xx = points3d[:, :2] / points3d[:, 2:3]
+        proj = intrinsics['f'] * xx + intrinsics['c']
+    return proj
 
 
 # COCO-25 -> H36M-17 joint mapping
