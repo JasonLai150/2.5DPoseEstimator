@@ -32,40 +32,46 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'external' / 'imar_tools')
 from util.dataset_util import read_cam_params, project_3d_to_2d
 
 
-# COCO-25 -> H36M-17 joint mapping
-# H36M-17: pelvis, rhip, rknee, rankle, lhip, lknee, lankle,
-#           spine, thorax, neck/nose, head, lshoulder, lelbow, lwrist,
-#           rshoulder, relbow, rwrist
+# IMAR COCO-25 joint ordering (Fit3D/chi3d/humansc3d datasets)
+# Derived from plot_over_image limb connections in imar_tools/util/dataset_util.py:
+#   spine: 10-9-8-7-0  (head_top - head - neck - thorax - pelvis)
+#   right arm: 8-11-12-13  (neck - rshoulder - relbow - rwrist)
+#   left arm:  8-14-15-16  (neck - lshoulder - lelbow - lwrist)
+#   right leg: 0-1-2-3     (pelvis - rhip - rknee - rankle)
+#   left leg:  0-4-5-6     (pelvis - lhip - lknee - lankle)
+#   extras 17-24: foot and hand keypoints
+#
+# H36M-17: pelvis(0), rhip(1), rknee(2), rankle(3), lhip(4), lknee(5), lankle(6),
+#           spine(7), thorax(8), neck(9), head(10),
+#           lshoulder(11), lelbow(12), lwrist(13), rshoulder(14), relbow(15), rwrist(16)
 COCO25_TO_H36M17 = {
-    0: 24,   # pelvis
-    1: 12,   # right_hip
-    2: 14,   # right_knee
-    3: 16,   # right_ankle
-    4: 11,   # left_hip
-    5: 13,   # left_knee
-    6: 15,   # left_ankle
-    # 7: spine -> interpolate
-    8: 23,   # thorax
-    9: 0,    # neck/nose
-    # 10: head -> interpolate
-    11: 5,   # left_shoulder
-    12: 7,   # left_elbow
-    13: 9,   # left_wrist
-    14: 6,   # right_shoulder
-    15: 8,   # right_elbow
-    16: 10,  # right_wrist
+    0:  0,   # pelvis      -> IMAR joint 0
+    1:  1,   # right_hip   -> IMAR joint 1
+    2:  2,   # right_knee  -> IMAR joint 2
+    3:  3,   # right_ankle -> IMAR joint 3
+    4:  4,   # left_hip    -> IMAR joint 4
+    5:  5,   # left_knee   -> IMAR joint 5
+    6:  6,   # left_ankle  -> IMAR joint 6
+    # 7: spine -> interpolate midpoint(pelvis, thorax)
+    8:  7,   # thorax      -> IMAR joint 7
+    9:  8,   # neck        -> IMAR joint 8
+    10: 9,   # head        -> IMAR joint 9
+    11: 14,  # left_shoulder  -> IMAR joint 14
+    12: 15,  # left_elbow     -> IMAR joint 15
+    13: 16,  # left_wrist     -> IMAR joint 16
+    14: 11,  # right_shoulder -> IMAR joint 11
+    15: 12,  # right_elbow    -> IMAR joint 12
+    16: 13,  # right_wrist    -> IMAR joint 13
 }
 
 
 def coco25_to_h36m17(poses: np.ndarray) -> np.ndarray:
-    """Convert (T, 25, 3) COCO-25 to (T, 17, 3) H36M-17."""
+    """Convert (T, 25, 3) IMAR COCO-25 to (T, 17, 3) H36M-17."""
     out = np.zeros((*poses.shape[:-2], 17, 3), dtype=poses.dtype)
     for h36m_idx, coco_idx in COCO25_TO_H36M17.items():
         out[..., h36m_idx, :] = poses[..., coco_idx, :]
-    # Spine: midpoint pelvis + thorax
-    out[..., 7, :] = (out[..., 0, :] + out[..., 8, :]) / 2.0
-    # Head: weighted avg of nose, left_ear, right_ear
-    out[..., 10, :] = poses[..., 0, :] * 0.4 + poses[..., 3, :] * 0.3 + poses[..., 4, :] * 0.3
+    # Spine (H36M joint 7): midpoint of pelvis (IMAR 0) and thorax (IMAR 7)
+    out[..., 7, :] = (poses[..., 0, :] + poses[..., 7, :]) / 2.0
     return out
 
 
