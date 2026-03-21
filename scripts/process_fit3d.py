@@ -82,7 +82,7 @@ def project_poses_to_2d(poses_3d_world: np.ndarray, cam_params: dict) -> np.ndar
     R = cam_params['extrinsics']['R']        # (3, 3)
     T = cam_params['extrinsics']['T'].reshape(3)  # (3,)
     intrinsics = cam_params['intrinsics_w_distortion']
-    cx, cy = float(intrinsics['c'][0]), float(intrinsics['c'][1])
+    cx, cy = intrinsics['c'].flatten()[:2].astype(float)
 
     T_frames, J, _ = poses_3d_world.shape
 
