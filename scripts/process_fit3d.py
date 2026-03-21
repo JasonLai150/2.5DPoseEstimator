@@ -65,19 +65,15 @@ def coco25_to_h36m17(poses: np.ndarray) -> np.ndarray:
     return out
 
 
-def project_poses(poses_3d: np.ndarray, cam_params: dict) -> np.ndarray:
+def orthographic_normalize(poses_3d: np.ndarray) -> np.ndarray:
     """
-    Project (T, J, 3) 3D poses to (T, J, 2) 2D using IMAR's projection
-    with proper lens distortion handling.
+    Normalize 3D poses to 2D input via orthographic projection (XY plane).
+    Scales to [-1, 1] based on body scale (~1m half-range).
+    Used since Fit3D joints3d_25 are in body-centered space, not camera space.
     """
-    T, J, _ = poses_3d.shape
-    poses_flat = poses_3d.reshape(-1, 3)  # (T*J, 3)
-
-    intr = cam_params.get('intrinsics_w_distortion', cam_params.get('intrinsics_wo_distortion'))
-    intr_type = 'w_distortion' if 'intrinsics_w_distortion' in cam_params else 'wo_distortion'
-
-    proj = project_3d_to_2d(poses_flat, intr, intr_type)  # (T*J, 2)
-    return proj.reshape(T, J, 2)
+    poses_2d = poses_3d[..., :2].copy()  # take XY
+    poses_2d = poses_2d / 1.0            # already in meters, 1m ≈ half body width/height
+    return np.clip(poses_2d, -2.0, 2.0)
 
 
 def process_subject(subject_dir: Path, output_dir: Path, cam_id: str) -> list:
@@ -105,20 +101,8 @@ def process_subject(subject_dir: Path, output_dir: Path, cam_id: str) -> list:
         pelvis = poses_h36m[:, 0:1, :]
         poses_centered = poses_h36m - pelvis
 
-        # Load camera and project to 2D using IMAR tools
-        cam_json = cam_base / f'{action}.json'
-        if cam_json.exists():
-            cam_params = read_cam_params(str(cam_json))
-            poses_2d = project_poses(poses_h36m, cam_params)
-
-            # Normalize to [-1, 1] using principal point as image center
-            intr = cam_params.get('intrinsics_w_distortion', cam_params.get('intrinsics_wo_distortion'))
-            cx, cy = float(intr['c'][0, 0]), float(intr['c'][0, 1])
-            poses_2d[..., 0] = poses_2d[..., 0] / cx - 1.0
-            poses_2d[..., 1] = poses_2d[..., 1] / cy - 1.0
-        else:
-            # Fallback: orthographic from 3D
-            poses_2d = poses_h36m[..., :2].copy()
+        # Orthographic 2D: use XY of body-space 3D coords, scaled to [-1, 1]
+        poses_2d = orthographic_normalize(poses_centered)
 
         # Save
         seq_name = f"{subject_dir.name}_{action}"
