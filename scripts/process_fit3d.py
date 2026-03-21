@@ -8,8 +8,12 @@ camera handling (including lens distortion correction).
 Fit3D structure (train only has GT):
     train/
         s03/, s04/, ..., s11/
-            joints3d_25/<action>.json  -> (T, 25, 3) meters, COCO-25 joints
+            joints3d_25/<action>.json  -> (T, 25, 3) meters, world space
             camera_parameters/<cam_id>/<action>.json
+
+2D normalization matches H36M convention:
+    u_norm = u / cx - 1.0  (maps [0, 2*cx] to [-1, 1])
+    v_norm = v / cy - 1.0
 
 Usage:
     python scripts/process_fit3d.py --data_root ./data/Fit3D --output_dir ./data/processed/fit3d
@@ -65,18 +69,46 @@ def coco25_to_h36m17(poses: np.ndarray) -> np.ndarray:
     return out
 
 
-def orthographic_normalize(poses_3d: np.ndarray) -> np.ndarray:
+def project_poses_to_2d(poses_3d_world: np.ndarray, cam_params: dict) -> np.ndarray:
     """
-    Normalize 3D poses to 2D input via orthographic projection (XY plane).
-    Scales to [-1, 1] based on body scale (~1m half-range).
-    Used since Fit3D joints3d_25 are in body-centered space, not camera space.
+    Project (T, J, 3) world-space joints to (T, J, 2) normalized 2D.
+
+    Pipeline:
+      1. Apply extrinsics: x_cam = R @ x_world + T
+      2. Project with distortion via IMAR tools
+      3. Normalize: u_norm = u/cx - 1, v_norm = v/cy - 1
+         (matches H36M convention: pixel/500 - 1 with cx=cy=500)
     """
-    poses_2d = poses_3d[..., :2].copy()  # take XY
-    poses_2d = poses_2d / 1.0            # already in meters, 1m ≈ half body width/height
-    return np.clip(poses_2d, -2.0, 2.0)
+    R = cam_params['extrinsics']['R']        # (3, 3)
+    T = cam_params['extrinsics']['T'].reshape(3)  # (3,)
+    intrinsics = cam_params['intrinsics_w_distortion']
+    cx, cy = float(intrinsics['c'][0]), float(intrinsics['c'][1])
+
+    T_frames, J, _ = poses_3d_world.shape
+
+    # Transform world -> camera space (vectorized)
+    pts_flat = poses_3d_world.reshape(-1, 3)        # (T*J, 3)
+    pts_cam = pts_flat @ R.T + T                    # (T*J, 3)
+
+    # Warn if depth looks wrong (should be meters, ~2-8m for indoor)
+    z_vals = pts_cam[:, 2]
+    if z_vals.min() < 0.1:
+        neg_pct = (z_vals < 0.1).mean() * 100
+        print(f"    WARNING: {neg_pct:.1f}% of points have Z < 0.1m "
+              f"(min={z_vals.min():.3f}). Check extrinsics convention.")
+
+    # Project to pixels using IMAR tools (handles distortion)
+    proj_px = project_3d_to_2d(pts_cam, intrinsics, 'w_distortion')  # (T*J, 2)
+
+    # Normalize to match H36M: (pixel - c) / c = pixel/c - 1
+    proj_px[:, 0] = proj_px[:, 0] / cx - 1.0
+    proj_px[:, 1] = proj_px[:, 1] / cy - 1.0
+
+    return proj_px.reshape(T_frames, J, 2).astype(np.float32)
 
 
-def process_subject(subject_dir: Path, output_dir: Path, cam_id: str) -> list:
+def process_subject(subject_dir: Path, output_dir: Path, cam_id: str,
+                    debug_first: bool = False) -> list:
     """Process all actions for one subject."""
     joints_dir = subject_dir / 'joints3d_25'
     cam_base = subject_dir / 'camera_parameters' / cam_id
@@ -86,23 +118,42 @@ def process_subject(subject_dir: Path, output_dir: Path, cam_id: str) -> list:
         return []
 
     metadata = []
+    first_action = True
 
     for joints_file in tqdm(sorted(joints_dir.glob('*.json')), desc=subject_dir.name, leave=False):
         action = joints_file.stem
 
-        # Load 3D joints
+        # Load camera parameters for this action
+        cam_file = cam_base / f'{action}.json'
+        if not cam_file.exists():
+            print(f"  No camera file for {action}, skipping")
+            continue
+
+        cam_params = read_cam_params(str(cam_file))
+
+        # Debug: print camera structure on first action
+        if first_action and debug_first:
+            print(f"\n  Camera params keys: {list(cam_params.keys())}")
+            for k1 in cam_params:
+                print(f"    {k1}: {list(cam_params[k1].keys())}")
+                for k2 in cam_params[k1]:
+                    print(f"      {k2}: shape={cam_params[k1][k2].shape}, "
+                          f"values={cam_params[k1][k2].flatten()[:4]}")
+            first_action = False
+
+        # Load 3D joints (world space)
         with open(joints_file) as f:
             poses_coco25 = np.array(json.load(f)['joints3d_25'])  # (T, 25, 3) meters
 
-        # Convert to H36M-17
+        # Convert to H36M-17 (still in world space)
         poses_h36m = coco25_to_h36m17(poses_coco25)
 
-        # Center at pelvis (root-relative)
+        # Project world-space joints to normalized 2D
+        poses_2d = project_poses_to_2d(poses_h36m, cam_params)
+
+        # Center 3D at pelvis (root-relative) — for the prediction target only
         pelvis = poses_h36m[:, 0:1, :]
         poses_centered = poses_h36m - pelvis
-
-        # Orthographic 2D: use XY of body-space 3D coords, scaled to [-1, 1]
-        poses_2d = orthographic_normalize(poses_centered)
 
         # Save
         seq_name = f"{subject_dir.name}_{action}"
@@ -131,6 +182,8 @@ def main():
                         help='Camera ID to use (50591643, 58860488, 60457274, 65906101)')
     parser.add_argument('--eval_subjects', type=str, nargs='+', default=['s11'],
                         help='Train subjects to hold out for evaluation')
+    parser.add_argument('--debug', action='store_true',
+                        help='Print camera parameter structure on first action')
     args = parser.parse_args()
 
     data_root = Path(args.data_root)
@@ -151,7 +204,8 @@ def main():
     for subject_dir in subjects:
         split = 'test' if subject_dir.name in args.eval_subjects else 'train'
         out_split = output_dir / split
-        metadata = process_subject(subject_dir, out_split, args.cam_id)
+        metadata = process_subject(subject_dir, out_split, args.cam_id,
+                                   debug_first=args.debug)
         all_metadata[split].extend(metadata)
 
     # Save metadata and print summary
