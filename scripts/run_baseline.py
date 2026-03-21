@@ -83,11 +83,11 @@ def compute_p_mpjpe(pred, target, valid=None):
 
     H = np.einsum('nij,nik->njk', p_norm, t_norm)
     U, S, Vt = np.linalg.svd(H)
-    R = np.einsum('nij,nkj->nik', Vt, U)
+    R = np.einsum('nji,nkj->nik', Vt, U)
 
     det = np.linalg.det(R)
     Vt[det < 0, -1, :] *= -1
-    R = np.einsum('nij,nkj->nik', Vt, U)
+    R = np.einsum('nji,nkj->nik', Vt, U)
 
     t_mean = t.mean(axis=1, keepdims=True)
     p_aligned = np.einsum('nij,nkj->nki', R, p_norm) * t_scale + t_mean
