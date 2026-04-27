@@ -1,1 +1,1 @@
-from acae import AffineCombinationLayer, AffineCombiningAutoencoder, AffineCombiningAutoencoderTrainer
+from acae_2D_extension.affine_combining_autoencoder.acae import AffineCombinationLayer, AffineCombiningAutoencoder, AffineCombiningAutoencoderTrainer

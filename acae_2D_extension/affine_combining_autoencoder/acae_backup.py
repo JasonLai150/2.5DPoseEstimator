@@ -84,7 +84,7 @@ def train_acae(
     
     import sys
     sys.path.append('.')
-    import visualize_poses
+    import acae_2D_extension.visualize_poses as visualize_poses
 
     class VizCallback(tf.keras.callbacks.Callback):
         def on_train_begin(self, logs=None):
