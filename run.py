@@ -16,6 +16,7 @@ import torch.optim as optim
 import os
 import sys
 import errno
+import copy
 
 from common.camera import *
 from common.model import *
@@ -26,6 +27,54 @@ from common.utils import deterministic_random
 
 args = parse_args()
 print(args)
+
+# EDIT
+def make_unit_camera():
+    # Normalized pseudo-intrinsics for already-normalized 2D coords:
+    # f=(1,1), c=(0,0), k=(0,0,0), p=(0,0)
+    return np.array([1., 1., 0., 0., 0., 0., 0., 0., 0.], dtype=np.float32)
+
+def load_external_gym_2d(npz_path, action_name='custom', downsample=1):
+    data = np.load(npz_path, allow_pickle=True)
+    positions_2d = data['positions_2d'].item()
+    metadata = data['metadata'].item()
+    video_meta = metadata.get('video_metadata', {})
+
+    cameras = []
+    poses_2d = []
+
+    for subject in sorted(positions_2d.keys()):
+        if action_name not in positions_2d[subject]:
+            continue
+
+        seq_list = positions_2d[subject][action_name]
+        if len(seq_list) == 0:
+            continue
+
+        # custom format stores one sequence in a list
+        seq = seq_list[0].astype('float32')   # (T, 17, 2)
+
+        # normalize using per-video width/height if available
+        vm = video_meta.get(subject, None)
+        if vm is not None and 'w' in vm and 'h' in vm:
+            seq[..., :2] = normalize_screen_coordinates(seq[..., :2], w=vm['w'], h=vm['h'])
+
+        if downsample > 1:
+            seq = seq[::downsample]
+
+        poses_2d.append(seq)
+        cameras.append(make_unit_camera())
+
+    if len(poses_2d) == 0:
+        raise RuntimeError(f'No usable sequences found in {npz_path}')
+
+    print(f"Loaded {len(poses_2d)} external gym sequences from {npz_path}")
+    for i, seq in enumerate(poses_2d[:3]):
+        print("gym seq", i, seq.shape, seq.min(), seq.max())
+
+    return cameras, poses_2d
+
+# EDIT
 
 try:
     # Create checkpoint directory if it does not exist
@@ -42,6 +91,9 @@ if args.dataset == 'h36m':
 elif args.dataset.startswith('humaneva'):
     from common.humaneva_dataset import HumanEvaDataset
     dataset = HumanEvaDataset(dataset_path)
+elif args.dataset.startswith('mpi'):
+    from common.mpi_dataset import Mpi3dhpDataset
+    dataset = Mpi3dhpDataset(mpi_root='mpi_datasets', use_universal_3d=True)
 elif args.dataset.startswith('custom'):
     from common.custom_dataset import CustomDataset
     dataset = CustomDataset('data/data_2d_' + args.dataset + '_' + args.keypoints + '.npz')
@@ -103,8 +155,29 @@ if not args.render:
 else:
     subjects_test = [args.viz_subject]
 
-semi_supervised = len(subjects_semi) > 0
-if semi_supervised and not dataset.supports_semi_supervised():
+if args.dataset.startswith('mpi'):
+    subjects_all = sorted(list(keypoints.keys()))
+
+    # IMPORTANT: guarantee non-empty train split
+    if len(subjects_all) == 1:
+        subjects_train = subjects_all
+        subjects_test  = subjects_all
+    else:
+        subjects_train = subjects_all[:-1]   # at least one subject
+        subjects_test  = subjects_all[-1:]   # one subject for test
+
+# semi_supervised = len(subjects_semi) > 0
+# if semi_supervised and not dataset.supports_semi_supervised():
+#     raise RuntimeError('Semi-supervised training is not implemented for this dataset')
+
+use_external_gym = args.gym_unlabeled != ''
+semi_supervised = (len(subjects_semi) > 0) or use_external_gym
+
+# External gym unlabeled data is only supported when the main supervised dataset is h36m
+if use_external_gym and args.dataset != 'h36m':
+    raise RuntimeError('External gym unlabeled data is only supported with -d h36m in this patch')
+
+if semi_supervised and (not dataset.supports_semi_supervised()) and (not use_external_gym):
     raise RuntimeError('Semi-supervised training is not implemented for this dataset')
             
 def fetch(subjects, action_filter=None, subset=1, parse_3d_poses=True):
@@ -209,7 +282,7 @@ if args.resume or args.evaluate:
     model_pos_train.load_state_dict(checkpoint['model_pos'])
     model_pos.load_state_dict(checkpoint['model_pos'])
     
-    if args.evaluate and 'model_traj' in checkpoint:
+    if args.evaluate and 'model_traj' in checkpoint and checkpoint['model_traj'] is not None:
         # Load trajectory model if it contained in the checkpoint (e.g. for inference in the wild)
         model_traj = TemporalModel(poses_valid_2d[0].shape[-2], poses_valid_2d[0].shape[-1], 1,
                             filter_widths=filter_widths, causal=args.causal, dropout=args.dropout, channels=args.channels,
@@ -231,7 +304,15 @@ if not args.evaluate:
 
     lr = args.learning_rate
     if semi_supervised:
-        cameras_semi, _, poses_semi_2d = fetch(subjects_semi, action_filter, parse_3d_poses=False)
+
+        if use_external_gym:
+            cameras_semi, poses_semi_2d = load_external_gym_2d(
+                args.gym_unlabeled,
+                action_name=args.gym_action,
+                downsample=args.downsample
+            )
+        else:
+            cameras_semi, _, poses_semi_2d = fetch(subjects_semi, action_filter, parse_3d_poses=False)
         
         if not args.disable_optimizations and not args.dense and args.stride == 1:
             # Use optimized model for single-frame predictions
@@ -290,19 +371,60 @@ if not args.evaluate:
                                                  pad=pad, causal_shift=causal_shift, augment=False)
         print('INFO: Semi-supervision on {} frames'.format(semi_generator_eval.num_frames()))
 
+    # if args.resume:
+    #     epoch = checkpoint['epoch']
+
+    #     if 'optimizer' in checkpoint and checkpoint['optimizer'] is not None:
+    #         try:
+    #             optimizer.load_state_dict(checkpoint['optimizer'])
+    #             print('Optimizer state restored from checkpoint.')
+    #         except Exception as e:
+    #             print('WARNING: could not load optimizer state from checkpoint:', e)
+    #             print('Continuing with freshly initialized optimizer.')
+    #     else:
+    #         print('WARNING: this checkpoint does not contain an optimizer state. The optimizer will be reinitialized.')
+
+    #     if 'random_state' in checkpoint and checkpoint['random_state'] is not None:
+    #         train_generator.set_random_state(checkpoint['random_state'])
+        
+    #     lr = checkpoint['lr']
+    #     if semi_supervised:
+    #         model_traj_train.load_state_dict(checkpoint['model_traj'])
+    #         model_traj.load_state_dict(checkpoint['model_traj'])
+    #         semi_generator.set_random_state(checkpoint['random_state_semi'])
     if args.resume:
         epoch = checkpoint['epoch']
+
         if 'optimizer' in checkpoint and checkpoint['optimizer'] is not None:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            train_generator.set_random_state(checkpoint['random_state'])
+            try:
+                optimizer.load_state_dict(checkpoint['optimizer'])
+                print('Optimizer state restored from checkpoint.')
+            except Exception as e:
+                print('WARNING: could not load optimizer state from checkpoint:', e)
+                print('Continuing with freshly initialized optimizer.')
         else:
             print('WARNING: this checkpoint does not contain an optimizer state. The optimizer will be reinitialized.')
-        
-        lr = checkpoint['lr']
+
+        if 'random_state' in checkpoint and checkpoint['random_state'] is not None:
+            train_generator.set_random_state(checkpoint['random_state'])
+
+        if 'lr' in checkpoint and checkpoint['lr'] is not None:
+            lr = checkpoint['lr']
+        else:
+            print('WARNING: no learning rate found in checkpoint. Keeping current lr.')
+
         if semi_supervised:
-            model_traj_train.load_state_dict(checkpoint['model_traj'])
-            model_traj.load_state_dict(checkpoint['model_traj'])
-            semi_generator.set_random_state(checkpoint['random_state_semi'])
+            if 'model_traj' in checkpoint and checkpoint['model_traj'] is not None:
+                model_traj_train.load_state_dict(checkpoint['model_traj'])
+                model_traj.load_state_dict(checkpoint['model_traj'])
+                print('Trajectory model state restored from checkpoint.')
+            else:
+                print('WARNING: no trajectory model state found in checkpoint. Using current initialization.')
+
+            if 'random_state_semi' in checkpoint and checkpoint['random_state_semi'] is not None:
+                semi_generator.set_random_state(checkpoint['random_state_semi'])
+            else:
+                print('WARNING: no semi-supervised random state found in checkpoint.')
             
     print('** Note: reported losses are averaged over all frames and test-time augmentation is not used here.')
     print('** The final evaluation will be carried out after the last training epoch.')

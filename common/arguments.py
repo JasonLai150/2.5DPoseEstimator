@@ -18,6 +18,10 @@ def parse_args():
     parser.add_argument('-ste', '--subjects-test', default='S9,S11', type=str, metavar='LIST', help='test subjects separated by comma')
     parser.add_argument('-sun', '--subjects-unlabeled', default='', type=str, metavar='LIST',
                         help='unlabeled subjects separated by comma for self-supervision')
+    parser.add_argument('--gym-unlabeled', default='', type=str, metavar='PATH',
+                    help='path to data_2d_custom_*.npz file for external unlabeled gym videos')
+    parser.add_argument('--gym-action', default='custom', type=str, metavar='STR',
+                    help='action key inside the custom gym npz (default: custom)')
     parser.add_argument('-a', '--actions', default='*', type=str, metavar='LIST',
                         help='actions to train/test on, separated by comma, or * for all')
     parser.add_argument('-c', '--checkpoint', default='checkpoint', type=str, metavar='PATH',
