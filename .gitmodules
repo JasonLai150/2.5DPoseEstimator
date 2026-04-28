@@ -1,7 +1,0 @@
-[submodule "external/imar_tools"]
-	path = external/imar_tools
-	url = https://github.com/sminchisescu-research/imar_vision_datasets_tools.git
-
-[submodule "external/MotionBERT"]
-	path = external/MotionBERT
-	url = https://github.com/Walter0807/MotionBERT.git

@@ -5,6 +5,18 @@ The paper relies also on code from several other repos, including [metrabs](http
 
 See the `train_acae` function in `acae.py` for how to train an ACAE.
 
+## Training with VideoPose3D
+
+from acae_torch import load_acae_from_checkpoint
+
+acae = load_acae_from_checkpoint('results/acae_checkpoint.pth', device='cuda')
+
+# In your joint forward pass:
+latent    = acae.encode(pose2d_input)   # (B, J_latent, C)
+vp3d_out  = videopose3d(latent)          # (B, J_latent, 3)
+pose3d    = acae.decode(vp3d_out)        # (B, J, 3)
+
+
 ## Publication reference
 If you find this code useful, consider citing the paper:
 
