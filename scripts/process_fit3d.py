@@ -75,42 +75,50 @@ def coco25_to_h36m17(poses: np.ndarray) -> np.ndarray:
     return out
 
 
-def project_poses_to_2d(poses_3d_world: np.ndarray, cam_params: dict) -> np.ndarray:
+def world_to_camera_and_project(poses_3d_world: np.ndarray,
+                                cam_params: dict) -> tuple[np.ndarray, np.ndarray]:
     """
-    Project (T, J, 3) world-space joints to (T, J, 2) normalized 2D.
+    Transform (T, J, 3) world-space joints to camera-space and project to normalized 2D.
 
-    Pipeline:
-      1. Apply extrinsics: x_cam = R @ x_world + T
+    Pipeline (IMAR convention, see imar_tools/util/ghum_util.py and
+    notebooks/visualize_lab_dataset.ipynb):
+      1. World -> camera: x_cam = (x_world - T) @ R^T
       2. Project with distortion via IMAR tools
       3. Normalize: u_norm = u/cx - 1, v_norm = v/cy - 1
          (matches H36M convention: pixel/500 - 1 with cx=cy=500)
+
+    Returns:
+        pts_cam_3d: (T, J, 3) camera-space joints in meters
+        poses_2d:   (T, J, 2) distortion-aware projected pixels normalized to ~[-1, 1]
     """
-    R = cam_params['extrinsics']['R']        # (3, 3)
+    R = cam_params['extrinsics']['R']             # (3, 3)
     T = cam_params['extrinsics']['T'].reshape(3)  # (3,)
     intrinsics = cam_params['intrinsics_w_distortion']
     cx, cy = intrinsics['c'].flatten()[:2].astype(float)
 
     T_frames, J, _ = poses_3d_world.shape
 
-    # Transform world -> camera space (vectorized)
-    pts_flat = poses_3d_world.reshape(-1, 3)        # (T*J, 3)
-    pts_cam = pts_flat @ R.T + T                    # (T*J, 3)
+    # World -> camera (IMAR convention)
+    pts_flat = poses_3d_world.reshape(-1, 3)          # (T*J, 3)
+    pts_cam = (pts_flat - T) @ R.T                    # (T*J, 3)
 
-    # Warn if depth looks wrong (should be meters, ~2-8m for indoor)
+    # Sanity: positive Z (in front of camera). Indoor lab range is roughly 2-8 m.
     z_vals = pts_cam[:, 2]
     if z_vals.min() < 0.1:
         neg_pct = (z_vals < 0.1).mean() * 100
         print(f"    WARNING: {neg_pct:.1f}% of points have Z < 0.1m "
               f"(min={z_vals.min():.3f}). Check extrinsics convention.")
 
-    # Project to pixels using IMAR tools (handles distortion)
+    # Project to pixels (distortion-aware)
     proj_px = project_3d_to_2d(pts_cam, intrinsics, 'w_distortion')  # (T*J, 2)
 
-    # Normalize to match H36M: (pixel - c) / c = pixel/c - 1
+    # Normalize to ~[-1, 1] using principal point (image is roughly 2*cx by 2*cy)
     proj_px[:, 0] = proj_px[:, 0] / cx - 1.0
     proj_px[:, 1] = proj_px[:, 1] / cy - 1.0
 
-    return proj_px.reshape(T_frames, J, 2).astype(np.float32)
+    pts_cam_3d = pts_cam.reshape(T_frames, J, 3).astype(np.float32)
+    poses_2d   = proj_px.reshape(T_frames, J, 2).astype(np.float32)
+    return pts_cam_3d, poses_2d
 
 
 def process_subject(subject_dir: Path, output_dir: Path, cam_id: str,
@@ -154,12 +162,12 @@ def process_subject(subject_dir: Path, output_dir: Path, cam_id: str,
         # Convert to H36M-17 (still in world space)
         poses_h36m = coco25_to_h36m17(poses_coco25)
 
-        # Project world-space joints to normalized 2D
-        poses_2d = project_poses_to_2d(poses_h36m, cam_params)
+        # World -> camera (3D) + distortion-aware projection (2D)
+        poses_cam_3d, poses_2d = world_to_camera_and_project(poses_h36m, cam_params)
 
-        # Center 3D at pelvis (root-relative) — for the prediction target only
-        pelvis = poses_h36m[:, 0:1, :]
-        poses_centered = poses_h36m - pelvis
+        # Root-center the camera-space 3D (matches the model's output convention)
+        pelvis = poses_cam_3d[:, 0:1, :]
+        poses_centered = poses_cam_3d - pelvis
 
         # Save
         seq_name = f"{subject_dir.name}_{action}"

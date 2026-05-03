@@ -12,7 +12,9 @@ Usage:
 """
 
 import argparse
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 import torch
 import numpy as np
@@ -116,6 +118,8 @@ def main():
                         help="Root for Fit3D processed data (e.g. ./data/processed/fit3d)")
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--seq_len", type=int, default=27)
+    parser.add_argument("--output_json", type=str, default=None,
+                        help="If set, dump results to this JSON path")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -172,6 +176,29 @@ def main():
     if "H36M" in results and "Fit3D" in results:
         gap = results["Fit3D"]["mpjpe"] - results["H36M"]["mpjpe"]
         print(f"\nDomain gap (H36M -> Fit3D): {gap:.2f} mm")
+
+    if args.output_json:
+        out_path = Path(args.output_json)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "checkpoint": str(Path(args.checkpoint).resolve()),
+            "checkpoint_config": ckpt_cfg,
+            "seq_len": seq_len,
+            "batch_size": args.batch_size,
+            "datasets": {
+                name: {
+                    "num_samples": len(loaders[name].dataset),
+                    "mpjpe_mm": float(metrics["mpjpe"]),
+                    "p_mpjpe_mm": float(metrics["p_mpjpe"]),
+                }
+                for name, metrics in results.items()
+            },
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "device": str(device),
+        }
+        with open(out_path, "w") as f:
+            json.dump(payload, f, indent=2)
+        print(f"\nResults written to: {out_path}")
 
 
 if __name__ == "__main__":

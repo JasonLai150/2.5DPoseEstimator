@@ -1,0 +1,31 @@
+{
+  "checkpoint": "/storage/ice1/0/9/jlai80/2.5DPoseEstimator/checkpoints/baseline_videopose.pt",
+  "checkpoint_config": {
+    "data_root": "./data/processed",
+    "epochs": 30,
+    "batch_size": 512,
+    "lr": 0.001,
+    "seq_len": 27,
+    "stride": 27,
+    "hidden_dim": 1024,
+    "num_blocks": 4,
+    "num_workers": 8,
+    "save_path": "checkpoints/baseline_videopose.pt"
+  },
+  "seq_len": 27,
+  "batch_size": 256,
+  "datasets": {
+    "H36M": {
+      "num_samples": 5000,
+      "mpjpe_mm": 61.9954330444336,
+      "p_mpjpe_mm": 48.062171936035156
+    },
+    "Fit3D": {
+      "num_samples": 2337,
+      "mpjpe_mm": 692.2402099609375,
+      "p_mpjpe_mm": 160.9180450439453
+    }
+  },
+  "timestamp": "2026-05-03T18:48:01.331582Z",
+  "device": "cuda"
+}
