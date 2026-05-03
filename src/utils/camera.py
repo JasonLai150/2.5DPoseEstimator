@@ -116,6 +116,39 @@ def project_to_2d(
     return torch.stack([u, v], dim=-1)
 
 
+def project_with_intrinsics(
+    points_3d: torch.Tensor,
+    intrinsics: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Project absolute camera-space 3D points to normalized 2D using per-sample
+    intrinsics, matching the `pixel/cx - 1` normalization that
+    `process_fit3d.py` and `process_videopose_data.py` apply on disk.
+
+    Args:
+        points_3d:   (B, T, J, 3) — absolute camera-space coords (meters), i.e.
+                     `root_relative_pose + cam_root`. Z must be positive.
+        intrinsics:  (B, 4)  — [fx, fy, cx, cy] in pixels per sample.
+
+    Returns:
+        (B, T, J, 2) — normalized 2D in ~[-1, 1].
+    """
+    if intrinsics.dim() == 1:
+        intrinsics = intrinsics.unsqueeze(0)
+    fx = intrinsics[:, 0].view(-1, 1, 1)
+    fy = intrinsics[:, 1].view(-1, 1, 1)
+    cx = intrinsics[:, 2].view(-1, 1, 1).clamp(min=1e-3)
+    cy = intrinsics[:, 3].view(-1, 1, 1).clamp(min=1e-3)
+
+    X = points_3d[..., 0]
+    Y = points_3d[..., 1]
+    Z = points_3d[..., 2].clamp(min=1e-3)
+
+    u_norm = (fx / cx) * (X / Z)
+    v_norm = (fy / cy) * (Y / Z)
+    return torch.stack([u_norm, v_norm], dim=-1)
+
+
 def normalize_screen_coordinates(
     coords: torch.Tensor,
     width: int,

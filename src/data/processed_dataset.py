@@ -81,6 +81,18 @@ class ProcessedPoseDataset(Dataset):
             if (seq_dir / "valid.npy").exists():
                 valid = np.load(seq_dir / "valid.npy")
 
+            # Optional reprojection-loss inputs (saved by process_fit3d.py).
+            # cam_root: (T, 3) absolute pelvis position in camera frame.
+            # cam_intrinsics: (4,) [fx, fy, cx, cy] in pixels for this sequence.
+            cam_root = (
+                np.load(seq_dir / "cam_root.npy")
+                if (seq_dir / "cam_root.npy").exists() else None
+            )
+            cam_intrinsics = (
+                np.load(seq_dir / "cam_intrinsics.npy")
+                if (seq_dir / "cam_intrinsics.npy").exists() else None
+            )
+
             n_frames = len(poses_3d)
 
             if self.return_full_sequence:
@@ -90,6 +102,8 @@ class ProcessedPoseDataset(Dataset):
                     'poses_3d': poses_3d,
                     'poses_2d': poses_2d,
                     'valid': valid,
+                    'cam_root': cam_root,
+                    'cam_intrinsics': cam_intrinsics,
                     'start': 0,
                     'end': n_frames,
                 })
@@ -101,6 +115,8 @@ class ProcessedPoseDataset(Dataset):
                         'poses_3d': poses_3d,
                         'poses_2d': poses_2d,
                         'valid': valid,
+                        'cam_root': cam_root,
+                        'cam_intrinsics': cam_intrinsics,
                         'start': start,
                         'end': start + self.seq_len,
                     })
@@ -121,6 +137,20 @@ class ProcessedPoseDataset(Dataset):
             'has_3d': not self.weakly_supervised,
             'sequence': sample['sequence'],
         }
+
+        # Reprojection-loss inputs. Default to zeros for datasets that don't
+        # provide them (e.g. H36M); the loss path will skip reproj on those.
+        if sample.get('cam_root') is not None:
+            result['cam_root'] = torch.from_numpy(sample['cam_root'][start:end].copy()).float()
+            result['has_reproj'] = True
+        else:
+            result['cam_root'] = torch.zeros(self.seq_len, 3, dtype=torch.float32)
+            result['has_reproj'] = False
+
+        if sample.get('cam_intrinsics') is not None:
+            result['cam_intrinsics'] = torch.from_numpy(sample['cam_intrinsics'].copy()).float()
+        else:
+            result['cam_intrinsics'] = torch.zeros(4, dtype=torch.float32)
 
         if sample['valid'] is not None:
             result['valid'] = torch.from_numpy(sample['valid'][start:end].copy()).bool()

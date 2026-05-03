@@ -165,9 +165,17 @@ def process_subject(subject_dir: Path, output_dir: Path, cam_id: str,
         # World -> camera (3D) + distortion-aware projection (2D)
         poses_cam_3d, poses_2d = world_to_camera_and_project(poses_h36m, cam_params)
 
-        # Root-center the camera-space 3D (matches the model's output convention)
-        pelvis = poses_cam_3d[:, 0:1, :]
-        poses_centered = poses_cam_3d - pelvis
+        # Root-center the camera-space 3D (matches the model's output convention).
+        # Also keep the absolute pelvis position and intrinsics for the
+        # reprojection loss (predicted root-relative 3D + cam_root -> absolute
+        # camera-space 3D, then project).
+        pelvis = poses_cam_3d[:, 0:1, :]                      # (T, 1, 3)
+        poses_centered = poses_cam_3d - pelvis                # (T, 17, 3)
+        cam_root = pelvis.squeeze(1)                          # (T, 3)
+        intr = cam_params['intrinsics_w_distortion']
+        fx, fy = np.array(intr['f']).flatten()[:2].astype(np.float32)
+        cx, cy = np.array(intr['c']).flatten()[:2].astype(np.float32)
+        cam_intrinsics = np.array([fx, fy, cx, cy], dtype=np.float32)
 
         # Save
         seq_name = f"{subject_dir.name}_{action}"
@@ -176,6 +184,8 @@ def process_subject(subject_dir: Path, output_dir: Path, cam_id: str,
 
         np.save(seq_out / 'poses_3d.npy', poses_centered.astype(np.float32))
         np.save(seq_out / 'poses_2d.npy', poses_2d.astype(np.float32))
+        np.save(seq_out / 'cam_root.npy', cam_root.astype(np.float32))
+        np.save(seq_out / 'cam_intrinsics.npy', cam_intrinsics)
 
         metadata.append({
             'sequence': seq_name,

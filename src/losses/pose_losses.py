@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any
 
-from ..utils.camera import PerspectiveCamera
+from ..utils.camera import PerspectiveCamera, project_with_intrinsics
 from ..data.skeleton import SKELETON_CONFIGS, compute_bone_lengths
 
 
@@ -267,13 +267,30 @@ class PoseLoss(nn.Module):
                 losses["l3d"] = l3d
                 total_loss = total_loss + self.lambda_3d * l3d
 
-        # Reprojection loss (for samples with 2D pseudo-labels)
-        if "poses_2d" in batch:
-            l_reproj = reprojection_loss(
-                pred_3d, batch["poses_2d"], self.camera, mask=mask
-            )
-            losses["reproj"] = l_reproj
-            total_loss = total_loss + self.lambda_reproj * l_reproj
+        # Reprojection loss — apply only to weakly-supervised samples that
+        # have absolute pelvis position + camera intrinsics on disk. We
+        # recover absolute camera-space 3D via `pred + cam_root` and project
+        # via `project_with_intrinsics` (output in normalized [-1, 1] space
+        # matching the on-disk 2D format).
+        if (
+            self.lambda_reproj > 0
+            and has_3d is not None
+            and torch.is_tensor(has_3d)
+            and "cam_root" in batch
+            and "cam_intrinsics" in batch
+            and "has_reproj" in batch
+        ):
+            weak = (~has_3d.bool()) & batch["has_reproj"].bool()
+            if weak.any():
+                pred_w = pred_3d[weak]                              # (Nw, T, J, 3)
+                cam_root = batch["cam_root"][weak].unsqueeze(2)     # (Nw, T, 1, 3)
+                abs_pred = pred_w + cam_root                        # camera-absolute
+                proj_2d = project_with_intrinsics(
+                    abs_pred, batch["cam_intrinsics"][weak]
+                )                                                   # (Nw, T, J, 2)
+                l_reproj = torch.abs(proj_2d - batch["poses_2d"][weak]).sum(-1).mean()
+                losses["reproj"] = l_reproj
+                total_loss = total_loss + self.lambda_reproj * l_reproj
 
         # Biomechanical constraints (always applied)
         l_symmetry = bilateral_symmetry_loss(pred_3d, self.skeleton)
