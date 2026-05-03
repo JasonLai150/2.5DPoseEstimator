@@ -12,7 +12,19 @@
 #SBATCH --account=coc
 
 # Hybrid training: DSTformer + LoRA + composite loss (lambda_reproj=0 for v1).
-# Args: $1 = epochs (default 60), $2 = extra args
+# Args: $1 = epochs (default 60), $2..N = extra args
+#
+# Walltime override examples (long walltimes deprioritize the job in slurm —
+# always pick the smallest reasonable ceiling for the run you're starting):
+#
+#   # full ~60-epoch run (default 8h ceiling)
+#   sbatch scripts/pace_train.sbatch 60
+#
+#   # 1-epoch smoke test (override walltime to 30 min for faster scheduling)
+#   sbatch --time=00:30:00 scripts/pace_train.sbatch 1 --smoke
+#
+#   # 10-epoch debug run (1h ceiling)
+#   sbatch --time=01:00:00 scripts/pace_train.sbatch 10
 EPOCHS="${1:-60}"
 EXTRA_ARGS="${@:2}"
 

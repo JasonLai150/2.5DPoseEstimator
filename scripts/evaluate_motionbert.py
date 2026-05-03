@@ -15,6 +15,7 @@ Usage:
 import argparse
 import json
 import sys
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.processed_dataset import ProcessedPoseDataset
+from src.metrics.pose_metrics import compute_bli
 from src.models.dstformer import DSTformer
 
 
@@ -85,18 +87,61 @@ def compute_p_mpjpe(pred_m: torch.Tensor, target_m: torch.Tensor) -> float:
     return float(np.linalg.norm(p_aligned - t, axis=-1).mean(axis=-1).mean())
 
 
+def _action_from_seq(name: str) -> str:
+    """`s11_band_pull_apart` -> `band_pull_apart`. Strips the subject prefix."""
+    parts = name.split("_", 1)
+    return parts[1] if len(parts) == 2 else name
+
+
 @torch.no_grad()
-def evaluate(model: DSTformer, loader: DataLoader, device: torch.device, name: str) -> dict:
-    mpjpe, p_mpjpe = [], []
+def evaluate(model: DSTformer, loader: DataLoader, device: torch.device, name: str,
+             group_by_action: bool = False) -> dict:
+    """
+    Returns dict with overall MPJPE / P-MPJPE / BLI averaged over windows, and
+    optionally a per-action breakdown (for Fit3D where action info is in the
+    sequence name).
+    """
+    rows = []
     for batch in tqdm(loader, desc=f"Evaluating {name}"):
         poses_2d = batch["poses_2d"].to(device)
         poses_3d = batch["poses_3d"].to(device)
         pred_3d = model(poses_2d)
-        # Root-center predictions to match the GT convention (pelvis at origin).
-        pred_3d = pred_3d - pred_3d[..., 0:1, :]
-        mpjpe.append(compute_mpjpe(pred_3d, poses_3d))
-        p_mpjpe.append(compute_p_mpjpe(pred_3d, poses_3d))
-    return {"mpjpe": float(np.mean(mpjpe)), "p_mpjpe": float(np.mean(p_mpjpe))}
+        pred_3d = pred_3d - pred_3d[..., 0:1, :]  # root-center
+
+        seqs = batch["sequence"]
+        # Per-window stats so we can group later. compute_mpjpe / compute_p_mpjpe
+        # accept (B, T, J, 3) so feed them one window at a time (B=1).
+        for i in range(pred_3d.shape[0]):
+            p_i = pred_3d[i : i + 1]
+            t_i = poses_3d[i : i + 1]
+            rows.append({
+                "sequence": seqs[i],
+                "mpjpe": compute_mpjpe(p_i, t_i),
+                "p_mpjpe": compute_p_mpjpe(p_i, t_i),
+                "bli": float(compute_bli(p_i, "h36m_17").item()),
+            })
+
+    overall = {
+        "mpjpe":   float(np.mean([r["mpjpe"]   for r in rows])),
+        "p_mpjpe": float(np.mean([r["p_mpjpe"] for r in rows])),
+        "bli":     float(np.mean([r["bli"]     for r in rows])),
+    }
+    out = {"overall": overall}
+
+    if group_by_action:
+        by_act = defaultdict(list)
+        for r in rows:
+            by_act[_action_from_seq(r["sequence"])].append(r)
+        out["per_action"] = {
+            action: {
+                "n":       len(rs),
+                "mpjpe":   float(np.mean([r["mpjpe"]   for r in rs])),
+                "p_mpjpe": float(np.mean([r["p_mpjpe"] for r in rs])),
+                "bli":     float(np.mean([r["bli"]     for r in rs])),
+            }
+            for action, rs in sorted(by_act.items())
+        }
+    return out
 
 
 def make_loader(data_root: str, dataset: str, split: str, batch_size: int, seq_len: int) -> DataLoader:
@@ -130,18 +175,31 @@ def main():
     for n, l in loaders.items():
         print(f"  {n} test: {len(l.dataset)} windows ({args.seq_len}-frame)")
 
-    results = {n: evaluate(model, l, device, n) for n, l in loaders.items()}
+    results = {
+        n: evaluate(model, l, device, n, group_by_action=(n == "Fit3D"))
+        for n, l in loaders.items()
+    }
 
     print("\n" + "=" * 60)
     print("MotionBERT (MB_ft_h36m) zero-shot")
     print("=" * 60)
     for n, m in results.items():
         tag = "(in-domain)" if n == "H36M" else "(target domain)"
+        ov = m["overall"]
         print(f"\n{n} {tag}:")
-        print(f"  MPJPE:   {m['mpjpe']:.2f} mm")
-        print(f"  P-MPJPE: {m['p_mpjpe']:.2f} mm")
+        print(f"  MPJPE:   {ov['mpjpe']:.2f} mm")
+        print(f"  P-MPJPE: {ov['p_mpjpe']:.2f} mm")
+        print(f"  BLI:     {ov['bli']:.5f}    (variance of bilateral bone-length ratios)")
     if "H36M" in results and "Fit3D" in results:
-        print(f"\nDomain gap (H36M -> Fit3D): {results['Fit3D']['mpjpe'] - results['H36M']['mpjpe']:.2f} mm")
+        gap = results["Fit3D"]["overall"]["mpjpe"] - results["H36M"]["overall"]["mpjpe"]
+        print(f"\nDomain gap (H36M -> Fit3D): {gap:.2f} mm")
+
+    # Per-action breakdown for Fit3D
+    if "per_action" in results.get("Fit3D", {}):
+        print(f"\n{'-' * 60}\nFit3D per-action P-MPJPE (sorted hardest -> easiest):")
+        per_act = results["Fit3D"]["per_action"]
+        for action, m in sorted(per_act.items(), key=lambda kv: -kv[1]["p_mpjpe"]):
+            print(f"  {action:30s}  n={m['n']:3d}  MPJPE={m['mpjpe']:7.1f}mm  P-MPJPE={m['p_mpjpe']:6.1f}mm  BLI={m['bli']:.4f}")
 
     if args.output_json:
         out = Path(args.output_json)

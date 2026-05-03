@@ -1,0 +1,19 @@
+{
+  "model": "DSTformer (MotionBERT MB_ft_h36m)",
+  "weights": "/storage/ice1/0/9/jlai80/2.5DPoseEstimator/checkpoints/motionbert/pose3d/MB_ft_h36m.bin",
+  "seq_len": 243,
+  "datasets": {
+    "H36M": {
+      "num_samples": 532,
+      "mpjpe": 521.952059533861,
+      "p_mpjpe": 27.839847564697266
+    },
+    "Fit3D": {
+      "num_samples": 240,
+      "mpjpe": 291.5477678179741,
+      "p_mpjpe": 161.4603614807129
+    }
+  },
+  "timestamp": "2026-05-03T21:42:36.237488Z",
+  "device": "cuda"
+}
