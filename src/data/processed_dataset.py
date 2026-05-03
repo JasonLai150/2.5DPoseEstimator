@@ -31,6 +31,7 @@ class ProcessedPoseDataset(Dataset):
         seq_len: int = 243,
         stride: int = 81,
         return_full_sequence: bool = False,
+        weakly_supervised: bool = False,
     ):
         self.data_root = Path(data_root)
         self.dataset = dataset
@@ -38,6 +39,10 @@ class ProcessedPoseDataset(Dataset):
         self.seq_len = seq_len
         self.stride = stride
         self.return_full_sequence = return_full_sequence
+        # When True, samples are exposed with has_3d=False so the 3D loss
+        # term skips them. The 3D arrays remain in the batch for collate
+        # compatibility but are ignored by PoseLoss.
+        self.weakly_supervised = weakly_supervised
 
         self.data_path = self.data_root / dataset / split
         self.samples = []
@@ -113,7 +118,7 @@ class ProcessedPoseDataset(Dataset):
         result = {
             'poses_3d': poses_3d,
             'poses_2d': poses_2d,
-            'has_3d': True,
+            'has_3d': not self.weakly_supervised,
             'sequence': sample['sequence'],
         }
 
@@ -133,6 +138,7 @@ def create_dataloader(
     shuffle: bool = False,
     num_workers: int = 4,
     return_full_sequence: bool = False,
+    weakly_supervised: bool = False,
 ):
     """Create a DataLoader for processed pose data."""
     from torch.utils.data import DataLoader
@@ -144,6 +150,7 @@ def create_dataloader(
         seq_len=seq_len,
         stride=stride,
         return_full_sequence=return_full_sequence,
+        weakly_supervised=weakly_supervised,
     )
 
     return DataLoader(

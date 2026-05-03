@@ -250,11 +250,22 @@ class PoseLoss(nn.Module):
 
         mask = batch.get("mask", None)
 
-        # 3D supervised loss
-        if batch.get("has_3d", False) and "poses_3d" in batch:
-            l3d = mpjpe_loss(pred_3d, batch["poses_3d"], mask=mask)
-            losses["l3d"] = l3d
-            total_loss = total_loss + self.lambda_3d * l3d
+        # 3D supervised loss — apply only to samples flagged has_3d=True.
+        # `has_3d` is a per-sample bool tensor when batches mix 3D-supervised
+        # and weakly-supervised sources (e.g. H36M + Fit3D-train).
+        has_3d = batch.get("has_3d", None)
+        if has_3d is not None and "poses_3d" in batch:
+            if torch.is_tensor(has_3d):
+                sup = has_3d.bool()
+                if sup.any():
+                    sup_mask = mask[sup] if mask is not None else None
+                    l3d = mpjpe_loss(pred_3d[sup], batch["poses_3d"][sup], mask=sup_mask)
+                    losses["l3d"] = l3d
+                    total_loss = total_loss + self.lambda_3d * l3d
+            elif has_3d:
+                l3d = mpjpe_loss(pred_3d, batch["poses_3d"], mask=mask)
+                losses["l3d"] = l3d
+                total_loss = total_loss + self.lambda_3d * l3d
 
         # Reprojection loss (for samples with 2D pseudo-labels)
         if "poses_2d" in batch:

@@ -208,7 +208,16 @@ class Trainer:
 
             pred_3d = self.model(batch["poses_2d"], batch.get("mask"))
 
-            if batch.get("has_3d", False) and "poses_3d" in batch:
+            # `has_3d` is a per-sample bool tensor when sources mix; only update
+            # metrics on samples that have 3D ground truth.
+            has_3d = batch.get("has_3d", None)
+            if has_3d is None or "poses_3d" not in batch:
+                continue
+            if torch.is_tensor(has_3d):
+                sup = has_3d.bool()
+                if sup.any():
+                    self.metrics.update(pred_3d[sup], batch["poses_3d"][sup])
+            elif has_3d:
                 self.metrics.update(pred_3d, batch["poses_3d"])
 
         return self.metrics.compute()
