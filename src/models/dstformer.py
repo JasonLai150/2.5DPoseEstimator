@@ -354,15 +354,16 @@ class DSTformer(PoseEstimatorBase):
         # Map MotionBERT keys to our model
         new_state_dict = {}
         for k, v in state_dict.items():
-            # Remove 'module.' prefix if present
+            # Remove 'module.' prefix if present (DataParallel save)
             if k.startswith('module.'):
                 k = k[7:]
 
-            # Map block names
-            new_key = k
-            # Add more mappings as needed
+            # MotionBERT names the stream-fusion attention 'ts_attn';
+            # we name it 'stream_fusion'. Re-map.
+            if k.startswith('ts_attn.'):
+                k = 'stream_fusion.' + k[len('ts_attn.'):]
 
-            new_state_dict[new_key] = v
+            new_state_dict[k] = v
 
         # Load with strict=False to handle mismatches
         missing, unexpected = self.load_state_dict(new_state_dict, strict=False)

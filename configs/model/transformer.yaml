@@ -7,12 +7,12 @@ input_dim: 2   # 2D input keypoints (x, y) - confidence added internally
 output_dim: 3  # 3D output coordinates
 seq_len: 243   # Temporal window (frames)
 
-# Architecture (matches MotionBERT defaults for weight compatibility)
-embed_dim: 256
+# Architecture (matches MotionBERT MB_release defaults for weight compatibility)
+embed_dim: 512
 dim_rep: 512
 depth: 5
 num_heads: 8
-mlp_ratio: 4.0
+mlp_ratio: 2.0
 drop_rate: 0.0
 attn_drop_rate: 0.0
 drop_path_rate: 0.1
