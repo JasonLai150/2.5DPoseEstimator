@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=24G
 #SBATCH --time=00:30:00
-#SBATCH --partition=coc-gpu
+#SBATCH --partition=ice-gpu
 #SBATCH --account=coc
 
 # Evaluate pretrained MotionBERT zero-shot on H36M + Fit3D.

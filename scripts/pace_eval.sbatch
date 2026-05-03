@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=16G
 #SBATCH --time=00:30:00
-#SBATCH --partition=coc-gpu
+#SBATCH --partition=ice-gpu
 #SBATCH --account=coc
 
 # Evaluate a saved checkpoint on H36M and Fit3D test sets.

@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 #SBATCH --time=08:00:00
-#SBATCH --partition=coc-gpu
+#SBATCH --partition=ice-gpu
 #SBATCH --account=coc
 
 # Hybrid training: DSTformer + LoRA + composite loss (lambda_reproj=0 for v1).
