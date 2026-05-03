@@ -2,9 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**See [RESEARCH_OVERVIEW.md](RESEARCH_OVERVIEW.md) for the full research motivation and methodology.**
+
 ## Project Overview
 
 A 3D human pose estimator bridging the domain gap between clean lab-captured 3D data and high-occlusion in-the-wild fitness video data. Uses a hybrid 2.5D training loop with weakly-supervised reprojection and biomechanical constraints.
+
+**Core Research Question:** Can we fine-tune a 3D pose estimator for gym/exercise videos using only 2D data, when 3D labeled gym data doesn't exist?
 
 ## Architecture
 
