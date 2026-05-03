@@ -1,6 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from run_paths import ACAE_CHECKPOINT_PATH, first_existing_path
 import seaborn as sns
 import torch
 
@@ -150,7 +155,7 @@ def main():
     print("Loading data and checkpoint...")
     poses_test = np.load('acae_data/poses_test.npy')
     joint_names = list(np.load('acae_data/joint_names.npy'))
-    ckpt_path = 'acae_data/checkpoints/acae_aligned_checkpoint.pth'
+    ckpt_path = first_existing_path(ACAE_CHECKPOINT_PATH, 'acae_data/checkpoints/acae_aligned_checkpoint.pth')
     
     if os.path.exists(ckpt_path):
         # Load w1, w2 directly from checkpoint to ensure we use the best weights

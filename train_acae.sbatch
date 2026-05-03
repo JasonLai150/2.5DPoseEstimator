@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=acae_aligned
-#SBATCH --output=acae_aligned_%j.out
-#SBATCH --error=acae_aligned_%j.err
+#SBATCH --output=artifacts/logs/acae_aligned_%j.out
+#SBATCH --error=artifacts/logs/acae_aligned_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -38,6 +38,7 @@ echo "=========================================="
 
 python acae_2D_extension/train_aligned_acae.py \
     --data-dir acae_data \
+    --checkpoint-dir artifacts/checkpoints \
     --device auto \
     --epochs 30 \
     --batch-size 64 \
@@ -46,8 +47,8 @@ python acae_2D_extension/train_aligned_acae.py \
 
 echo ""
 echo "=========================================="
-echo "Done! Check acae_data/ for outputs."
+echo "Done! Check artifacts/checkpoints/ for outputs."
 echo "=========================================="
-echo "  acae_data/acae_aligned_checkpoint.pth"
-echo "  acae_data/result.npz"
-echo "  acae_data/losses.csv"
+echo "  artifacts/checkpoints/acae_aligned_checkpoint.pth"
+echo "  artifacts/checkpoints/result.npz"
+echo "  artifacts/checkpoints/losses.csv"

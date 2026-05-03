@@ -6,6 +6,7 @@
 #
 
 import argparse
+from run_paths import CHECKPOINT_DIR
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Training script')
@@ -24,7 +25,7 @@ def parse_args():
                     help='action key inside the custom gym npz (default: custom)')
     parser.add_argument('-a', '--actions', default='*', type=str, metavar='LIST',
                         help='actions to train/test on, separated by comma, or * for all')
-    parser.add_argument('-c', '--checkpoint', default='checkpoint', type=str, metavar='PATH',
+    parser.add_argument('-c', '--checkpoint', default=str(CHECKPOINT_DIR), type=str, metavar='PATH',
                         help='checkpoint directory')
     parser.add_argument('--checkpoint-frequency', default=10, type=int, metavar='N',
                         help='create a checkpoint every N epochs')

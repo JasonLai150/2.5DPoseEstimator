@@ -17,6 +17,7 @@ import os
 import sys
 import errno
 import copy
+from run_paths import ensure_artifact_dirs
 
 from common.camera import *
 from common.model import *
@@ -27,6 +28,7 @@ from common.utils import deterministic_random
 
 args = parse_args()
 print(args)
+ensure_artifact_dirs()
 
 # EDIT
 def make_unit_camera():
@@ -241,20 +243,73 @@ if action_filter is not None:
     
 cameras_valid, poses_valid, poses_valid_2d = fetch(subjects_test, action_filter)
 
+import sys
+import os
+import importlib.util
+
+# Dynamically load acae_2.5d_torch.py because the dot in the filename breaks standard imports
+acae_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'acae_2D_extension', 'affine_combining_autoencoder', 'acae_2.5d_torch.py'))
+spec = importlib.util.spec_from_file_location("acae_torch", acae_path)
+acae_module = importlib.util.module_from_spec(spec)
+sys.modules["acae_torch"] = acae_module
+spec.loader.exec_module(acae_module)
+load_acae_from_checkpoint = acae_module.load_acae_from_checkpoint
+
+class BridgedTemporalModel(nn.Module):
+    def __init__(self, vdp3d_model):
+        super().__init__()
+        ckpt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'acae_data', 'checkpoints', 'acae_aligned_checkpoint.pth'))
+        # Load ACAE and FREEZE it so VDP3D gradients don't ruin the alignment
+        self.acae = load_acae_from_checkpoint(ckpt_path, device='cuda' if torch.cuda.is_available() else 'cpu', freeze=True)
+        self.vdp3d = vdp3d_model
+
+    def forward(self, x):
+        B, T, J, C = x.shape
+        
+        # If the input is already 17 joints (e.g. pure H36M training data),
+        # bypass the ACAE completely to compute standard loss.
+        if J == 17:
+            return self.vdp3d(x)
+            
+        x_flat = x.reshape(B * T, J, C)
+        
+        # 1. Compress 28 joints down to canonical 17 H36M joints
+        latent_17_2d = self.acae.encode(x_flat)
+        latent_17_2d = latent_17_2d.reshape(B, T, 17, C)
+        
+        # 2. Lift 2D -> 3D using VideoPose3D
+        latent_17_3d = self.vdp3d(latent_17_2d)
+        
+        # 3. Expand the 17 3D joints back out to the full 28-joint skeleton
+        B_out, T_out, J_out, C_out = latent_17_3d.shape
+        latent_17_3d_flat = latent_17_3d.reshape(B_out * T_out, J_out, C_out)
+        
+        output_28_3d = self.acae.decode(latent_17_3d_flat)
+        return output_28_3d.reshape(B_out, T_out, 28, C_out)
+        
+    def receptive_field(self):
+        return self.vdp3d.receptive_field()
+        
+    def set_bn_momentum(self, momentum):
+        self.vdp3d.set_bn_momentum(momentum)
+
 filter_widths = [int(x) for x in args.architecture.split(',')]
 if not args.disable_optimizations and not args.dense and args.stride == 1:
     # Use optimized model for single-frame predictions
-    model_pos_train = TemporalModelOptimized1f(poses_valid_2d[0].shape[-2], poses_valid_2d[0].shape[-1], dataset.skeleton().num_joints(),
+    model_pos_train = TemporalModelOptimized1f(17, poses_valid_2d[0].shape[-1], 17,
                                 filter_widths=filter_widths, causal=args.causal, dropout=args.dropout, channels=args.channels)
 else:
     # When incompatible settings are detected (stride > 1, dense filters, or disabled optimization) fall back to normal model
-    model_pos_train = TemporalModel(poses_valid_2d[0].shape[-2], poses_valid_2d[0].shape[-1], dataset.skeleton().num_joints(),
+    model_pos_train = TemporalModel(17, poses_valid_2d[0].shape[-1], 17,
                                 filter_widths=filter_widths, causal=args.causal, dropout=args.dropout, channels=args.channels,
                                 dense=args.dense)
     
-model_pos = TemporalModel(poses_valid_2d[0].shape[-2], poses_valid_2d[0].shape[-1], dataset.skeleton().num_joints(),
+model_pos = TemporalModel(17, poses_valid_2d[0].shape[-1], 17,
                             filter_widths=filter_widths, causal=args.causal, dropout=args.dropout, channels=args.channels,
                             dense=args.dense)
+
+model_pos_train = BridgedTemporalModel(model_pos_train)
+model_pos = BridgedTemporalModel(model_pos)
 
 receptive_field = model_pos.receptive_field()
 print('INFO: Receptive field: {} frames'.format(receptive_field))
@@ -267,7 +322,8 @@ else:
 
 model_params = 0
 for parameter in model_pos.parameters():
-    model_params += parameter.numel()
+    if parameter.requires_grad:
+        model_params += parameter.numel()
 print('INFO: Trainable parameter count:', model_params)
 
 if torch.cuda.is_available():
@@ -330,7 +386,7 @@ if not args.evaluate:
         if torch.cuda.is_available():
             model_traj = model_traj.cuda()
             model_traj_train = model_traj_train.cuda()
-        optimizer = optim.Adam(list(model_pos_train.parameters()) + list(model_traj_train.parameters()),
+        optimizer = optim.Adam(filter(lambda p: p.requires_grad, list(model_pos_train.parameters()) + list(model_traj_train.parameters())),
                                lr=lr, amsgrad=True)
         
         losses_2d_train_unlabeled = []
@@ -342,7 +398,7 @@ if not args.evaluate:
         losses_traj_train_eval = []
         losses_traj_valid = []
     else:
-        optimizer = optim.Adam(model_pos_train.parameters(), lr=lr, amsgrad=True)
+        optimizer = optim.Adam(filter(lambda p: p.requires_grad, model_pos_train.parameters()), lr=lr, amsgrad=True)
         
     lr_decay = args.lr_decay
 

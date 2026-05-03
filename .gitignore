@@ -17,9 +17,21 @@ ENV/
 # Data (too large for git)
 /data/
 
+# Local external checkouts
+/external/ViTPose_fitness/
+
+# Generated ACAE visualizations
+/acae_data/*.png
+/acae_2D_extension/results/*.png
+
 # Checkpoints and logs
+/checkpoint/
+/artifacts/checkpoints/
+/artifacts/logs/
+/acae_data/checkpoints/
 checkpoints/
 logs/
+*.bin
 *.pt
 *.pth
 *.ckpt

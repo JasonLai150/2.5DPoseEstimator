@@ -1,0 +1,6 @@
+run eval_fit3d inference with these tags
+
+python -u eval_fit3d.py --skip-fit3d --skip-visualization --checkpoint checkpoint/mixed_finetuned_model.bin
+
+baseline is vidpose error, h36 error with bridge
+then compare fit3d error on mixed and regular model

@@ -24,6 +24,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
+from run_paths import ensure_artifact_dirs, CHECKPOINT_DIR
 
 # Import the PyTorch ACAE model directly (bypass __init__.py which imports TF)
 import importlib.util
@@ -343,6 +344,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Train ACAE with 17-joint H36M-aligned latent space')
     parser.add_argument('--data-dir', default='acae_data')
+    parser.add_argument('--checkpoint-dir', default=str(CHECKPOINT_DIR))
     parser.add_argument('--device', default='auto')
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--batch-size', type=int, default=64)
@@ -357,6 +359,7 @@ def main():
     else:
         device = args.device
     print(f'Device: {device}')
+    ensure_artifact_dirs()
 
     # Load data
     poses_train = np.load(os.path.join(args.data_dir, 'poses_train.npy'))
@@ -391,7 +394,7 @@ def main():
         align_lambda=args.align_lambda,
         training_epochs=args.epochs,
         device=device,
-        checkpoint_dir=args.data_dir,
+        checkpoint_dir=args.checkpoint_dir,
     )
 
 
