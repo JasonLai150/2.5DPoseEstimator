@@ -151,7 +151,7 @@ backbone-only, λ_3d=1, λ_reproj=0, λ_biomech=0.1):
   *improve* below zero-shot. Biomech is a converging regularizer (once
   poses are anatomically valid, it stops pulling).
 
-### 4.2 Final ablation table
+### 4.2 Final ablation table — Fit3D s11 (out-of-domain target)
 
 All runs init MB_ft_h36m, 15 epochs. Numbers are from
 `outputs/eval/v3_*.json`.
@@ -164,6 +164,37 @@ All runs init MB_ft_h36m, 15 epochs. Numbers are from
 | Hybrid + no H36M | 8 | 0 | 0.5 | 1.0 | 1e-4 | 259.17 | 181.48 | 0.00611 |
 | Hybrid + rank 2 | 2 | 1.0 | 0.5 | 1.0 | 1e-4 | 260.15 | 185.00 | 0.01213 |
 | **Hybrid + no H36M + rank 2** | **2** | **0** | **0.5** | **1.0** | **1e-4** | **245.78** ✓✓ | **175.98** | **0.00528** |
+
+### 4.2b Cross-domain evaluation — H36M test (in-domain, what we trade away)
+
+Same runs evaluated on H36M test set (532 windows, subjects S9 + S11):
+
+| Method | **H36M MPJPE** ↓ | **H36M P-MPJPE** ↓ | **H36M BLI** ↓ |
+|---|---|---|---|
+| MotionBERT zero-shot | 520.75 | **28.18** | 0.00157 |
+| Hybrid + low LR | 520.75 | 28.18 | 0.00157 |
+| Hybrid + biomech ×2 | 520.76 | 28.19 | 0.00157 |
+| Hybrid + no H36M | 546.84 | 69.47 | 0.00386 |
+| Hybrid + rank 2 | **215.16** ✓ | 170.71 ✗ | 0.03359 ✗ |
+| Hybrid + no H36M + rank 2 | 550.17 | 65.65 | 0.00318 |
+
+**Cross-domain trade-off observations:**
+
+- **No-free-lunch on the headline run**: gaining 18.6% on Fit3D MPJPE costs
+  ~6% on H36M MPJPE (521 → 550) and 2.3× on H36M P-MPJPE (28 → 66 mm).
+  Without H36M supervision, the model drifts out of the lab-data
+  distribution while adapting to gym domain.
+- **The "rank 2 alone" run shows a striking scale-vs-structure trade-off**:
+  raw H36M MPJPE drops 60% (521 → 215) — the rank-2 LoRA very
+  efficiently learns a *scale correction* — but H36M P-MPJPE
+  (Procrustes-aligned, scale-invariant) rises 6× (28 → 171). The 123k
+  trainable parameters fixed the scale-mismatch artifact at the cost
+  of distorting relative joint geometry. This is the cleanest single
+  experimental demonstration of LoRA's "scale gets fixed, structure gets
+  broken" failure mode in our setup.
+- **Trivial runs preserve H36M** (low_lr, biomech×2): identical H36M
+  numbers to zero-shot, confirming their best.pt is effectively the
+  unmodified base.
 
 **Headline:** the combined intervention reduces **Fit3D MPJPE by 18.6 %**
 (302.24 → 245.78 mm). It also yields the *smallest* P-MPJPE regression
