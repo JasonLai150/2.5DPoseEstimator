@@ -38,7 +38,10 @@ def set_seed(seed: int) -> None:
 def build_loaders(cfg, smoke: bool):
     """H36M (3D) + Fit3D-train (2D-only weakly-sup) for train; Fit3D s11 for val."""
     seq_len = cfg.data.seq_len
-    stride = cfg.data.get("stride", seq_len)
+    # Use one window per non-overlapping chunk. configs/data/default.yaml says
+    # stride=1 (sliding window) which inflates the train set to ~600k windows
+    # for seq_len=243 — caused an OOM-kill on the first real submission.
+    stride = seq_len
     bs = cfg.data.batch_size
     nw = cfg.data.num_workers
 
@@ -84,14 +87,28 @@ def main():
     ap.add_argument("--seq_len", type=int, default=None)
     ap.add_argument(
         "--pretrained",
-        default="checkpoints/motionbert/pretrain/MB_release.bin",
-        help="MotionBERT pretrained weights to initialize from",
+        default="checkpoints/motionbert/pose3d/MB_ft_h36m.bin",
+        help="MotionBERT pretrained weights to initialize from. "
+             "MB_ft_h36m.bin has the 3D pose head pre-trained on H36M (start at "
+             "~162mm P-MPJPE on Fit3D). MB_release.bin is the AMASS-pretrained "
+             "backbone only — head is randomly init'd, val starts at ~600mm and "
+             "needs many epochs to recover (the v1 run 5248031 hit this).",
     )
     ap.add_argument("--lora", action="store_true", default=True)
     ap.add_argument("--no-lora", dest="lora", action="store_false")
     ap.add_argument("--lora_rank", type=int, default=8)
     ap.add_argument("--smoke", action="store_true", help="Run a tiny smoke test (64 samples per loader)")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--lambda_3d", type=float, default=None,
+                    help="Override loss weight for 3D supervision (default 1.0). "
+                         "Set to 0 for 'no H36M anchor' ablation.")
+    ap.add_argument("--lambda_reproj", type=float, default=None,
+                    help="Override loss weight for 2D reprojection (default 0.5).")
+    ap.add_argument("--lambda_biomech", type=float, default=None,
+                    help="Override loss weight for biomechanical constraints (default 1.0).")
+    ap.add_argument("--run_name", default=None,
+                    help="Subdir under outputs/checkpoints/ for this run's checkpoints. "
+                         "Defaults to v1_hybrid_<timestamp> so multiple runs don't overwrite.")
     args = ap.parse_args()
 
     set_seed(args.seed)
@@ -108,11 +125,24 @@ def main():
     if args.lora:
         cfg.model.lora.rank = args.lora_rank
 
-    # Path A: turn off reprojection until the loss is wired correctly.
-    cfg.training.loss_weights.reproj = 0.0
+    # v2 defaults — overridable from CLI.
+    cfg.training.loss_weights.reproj = 0.5
+    cfg.training.loss_weights.biomech = 1.0
+    if args.lambda_3d is not None:
+        cfg.training.loss_weights.l3d = args.lambda_3d
+    if args.lambda_reproj is not None:
+        cfg.training.loss_weights.reproj = args.lambda_reproj
+    if args.lambda_biomech is not None:
+        cfg.training.loss_weights.biomech = args.lambda_biomech
 
     # Disable W&B for batch jobs that don't have wandb auth set up
     cfg.wandb.mode = "disabled"
+
+    # Per-run checkpoint dir so v1 and ablations don't clobber each other
+    from datetime import datetime
+    run_name = args.run_name or f"v1_hybrid_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    cfg.paths.checkpoint_dir = f"./outputs/checkpoints/{run_name}"
+    print(f"  run_name:       {run_name}")
 
     # Default skeleton + name fields if missing
     cfg.data.output_skeleton = cfg.data.get("output_skeleton", "h36m_17")

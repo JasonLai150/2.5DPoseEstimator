@@ -66,13 +66,14 @@ class Trainer:
         self.global_step = 0
 
     def _create_optimizer(self) -> torch.optim.Optimizer:
-        """Create optimizer from config."""
+        """Create optimizer from config. Casts numeric fields to float — YAML
+        scientific notation like '1e-4' (no decimal) parses as a string."""
         opt_cfg = self.cfg.training.optimizer
         return AdamW(
-            self.model.parameters(),
-            lr=opt_cfg.lr,
-            weight_decay=opt_cfg.weight_decay,
-            betas=tuple(opt_cfg.betas),
+            (p for p in self.model.parameters() if p.requires_grad),
+            lr=float(opt_cfg.lr),
+            weight_decay=float(opt_cfg.weight_decay),
+            betas=tuple(float(b) for b in opt_cfg.betas),
         )
 
     def _create_scheduler(self):
@@ -92,7 +93,7 @@ class Trainer:
         main_scheduler = CosineAnnealingLR(
             self.optimizer,
             T_max=total_epochs - sched_cfg.warmup_epochs,
-            eta_min=sched_cfg.min_lr,
+            eta_min=float(sched_cfg.min_lr),
         )
 
         return SequentialLR(
@@ -112,25 +113,44 @@ class Trainer:
         )
         wandb.watch(self.model, log_freq=100)
 
+        import time
         for epoch in range(self.current_epoch, self.cfg.training.epochs):
             self.current_epoch = epoch
+            t_epoch = time.time()
 
             # Train epoch
             train_metrics = self._train_epoch()
             wandb.log({"epoch": epoch, **{f"train/{k}": v for k, v in train_metrics.items()}})
 
+            # Single-line per-epoch summary so a long batch-job log can be
+            # followed with `tail -f` or `grep "EPOCH"`.
+            train_str = " ".join(f"{k}={v:.4f}" for k, v in train_metrics.items())
+            elapsed = time.time() - t_epoch
+
             # Validation
+            val_str = ""
             if self.val_loader and (epoch + 1) % self.cfg.training.val_every == 0:
                 val_metrics = self._validate()
                 wandb.log({f"val/{k}": v for k, v in val_metrics.items()})
+                val_str = " | val: " + " ".join(f"{k}={v:.2f}" for k, v in val_metrics.items())
 
                 # Checkpointing
                 if self.cfg.training.checkpoint.save_best:
                     monitor = self.cfg.training.checkpoint.monitor.split("/")[-1]
                     current = val_metrics.get(monitor, float("inf"))
-                    if current < self.best_metric:
+                    # Guard against NaN/inf — `nan < x` is False, so a NaN val
+                    # silently freezes best.pt at the prior epoch even though
+                    # the model may be diverging. Better to flag it.
+                    import math
+                    if math.isnan(current) or math.isinf(current):
+                        val_str += f"  [WARN: monitor={current}; skipping save]"
+                    elif current < self.best_metric:
                         self.best_metric = current
                         self.save_checkpoint("best.pt")
+                        val_str += f"  [BEST mpjpe={self.best_metric:.2f}]"
+
+            print(f"EPOCH {epoch + 1}/{self.cfg.training.epochs} ({elapsed:.0f}s) | "
+                  f"train: {train_str}{val_str}", flush=True)
 
             # Periodic checkpoint
             if (epoch + 1) % self.cfg.training.checkpoint.save_every == 0:
@@ -223,8 +243,11 @@ class Trainer:
         return self.metrics.compute()
 
     def save_checkpoint(self, filename: str) -> None:
-        """Save training checkpoint."""
+        """Save training checkpoint atomically — torch.save writes directly,
+        so a SIGKILL mid-write can leave a corrupted file. Write to .tmp then
+        rename so we never overwrite a good checkpoint with a partial one."""
         path = self.checkpoint_dir / filename
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
         torch.save({
             "epoch": self.current_epoch,
             "global_step": self.global_step,
@@ -233,7 +256,8 @@ class Trainer:
             "scheduler_state_dict": self.scheduler.state_dict(),
             "best_metric": self.best_metric,
             "config": config_to_dict(self.cfg) if hasattr(self.cfg, 'items') else self.cfg,
-        }, path)
+        }, tmp_path)
+        tmp_path.replace(path)  # atomic rename on POSIX
 
         # Clean up old checkpoints
         self._cleanup_checkpoints()

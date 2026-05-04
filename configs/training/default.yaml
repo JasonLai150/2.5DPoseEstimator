@@ -5,7 +5,7 @@ gradient_clip: 1.0
 # Optimizer
 optimizer:
   name: adamw
-  lr: 1e-4
+  lr: 1.0e-4         # NOTE: keep the trailing "0" — PyYAML parses "1e-4" as a string
   weight_decay: 0.01
   betas: [0.9, 0.999]
 
@@ -13,7 +13,7 @@ optimizer:
 scheduler:
   name: cosine
   warmup_epochs: 5
-  min_lr: 1e-6
+  min_lr: 1.0e-6
 
 # Loss weights (lambda values)
 loss_weights:

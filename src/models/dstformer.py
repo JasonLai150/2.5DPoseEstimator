@@ -346,8 +346,10 @@ class DSTformer(PoseEstimatorBase):
         # Handle different checkpoint formats
         if 'model' in checkpoint:
             state_dict = checkpoint['model']
-        elif 'model_pos' in checkpoint:
+        elif 'model_pos' in checkpoint:               # MotionBERT releases
             state_dict = checkpoint['model_pos']
+        elif 'model_state_dict' in checkpoint:        # our Trainer.save_checkpoint
+            state_dict = checkpoint['model_state_dict']
         else:
             state_dict = checkpoint
 

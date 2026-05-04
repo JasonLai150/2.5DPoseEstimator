@@ -52,10 +52,10 @@ COCO25_TO_H36M17 = {
     4:  4,   # left_hip    -> IMAR joint 4
     5:  5,   # left_knee   -> IMAR joint 5
     6:  6,   # left_ankle  -> IMAR joint 6
-    # 7: spine -> interpolate midpoint(pelvis, thorax)
-    8:  7,   # thorax      -> IMAR joint 7
-    9:  8,   # neck        -> IMAR joint 8
-    10: 9,   # head        -> IMAR joint 9
+    # 7: spine  -> derived (see below)
+    # 8: thorax -> derived (see below); IMAR[7] is mid-chest, not where H36M expects
+    9:  8,   # neck_nose   -> IMAR joint 8 (neck)
+    10: 9,   # head        -> IMAR joint 9 (head)
     11: 14,  # left_shoulder  -> IMAR joint 14
     12: 15,  # left_elbow     -> IMAR joint 15
     13: 16,  # left_wrist     -> IMAR joint 16
@@ -66,12 +66,21 @@ COCO25_TO_H36M17 = {
 
 
 def coco25_to_h36m17(poses: np.ndarray) -> np.ndarray:
-    """Convert (T, 25, 3) IMAR COCO-25 to (T, 17, 3) H36M-17."""
+    """Convert (T, 25, 3) IMAR COCO-25 to (T, 17, 3) H36M-17.
+
+    Skeleton-mapping note: IMAR's joint 7 ("thorax") sits at mid-chest,
+    while H36M's joint 8 ("thorax") sits at the base of the neck. Using
+    IMAR[7] directly produces a ~13cm vertical offset (verified by bone-
+    length comparison: H36M thorax->neck = 111mm, IMAR thorax->neck = 241mm).
+    Instead we re-derive thorax as the shoulder midpoint, which matches
+    H36M's anatomical convention. Spine is then midpoint(pelvis, thorax)."""
     out = np.zeros((*poses.shape[:-2], 17, 3), dtype=poses.dtype)
     for h36m_idx, coco_idx in COCO25_TO_H36M17.items():
         out[..., h36m_idx, :] = poses[..., coco_idx, :]
-    # Spine (H36M joint 7): midpoint of pelvis (IMAR 0) and thorax (IMAR 7)
-    out[..., 7, :] = (poses[..., 0, :] + poses[..., 7, :]) / 2.0
+    # Thorax (H36M joint 8): shoulder midpoint of IMAR's left (14) and right (11) shoulders
+    out[..., 8, :] = (poses[..., 11, :] + poses[..., 14, :]) / 2.0
+    # Spine (H36M joint 7): midpoint of pelvis and the new thorax
+    out[..., 7, :] = (poses[..., 0, :] + out[..., 8, :]) / 2.0
     return out
 
 

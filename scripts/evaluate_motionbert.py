@@ -47,12 +47,18 @@ class _Cfg:
                 setattr(self.data, k, v)
 
 
-def build_model(weights_path: str, seq_len: int, device: torch.device) -> DSTformer:
+def build_model(weights_path: str, seq_len: int, device: torch.device,
+                with_lora: bool = False, lora_rank: int = 8) -> DSTformer:
+    """Build DSTformer and load weights. `with_lora=True` applies LoRA before
+    loading — required when the checkpoint was produced by a LoRA fine-tune
+    (e.g. our Trainer's best.pt), since the saved state_dict contains LoRA
+    module params that need a place to live."""
     cfg = _Cfg(
         num_joints=17, input_dim=2, output_dim=3, seq_len=seq_len,
         embed_dim=512, dim_rep=512, depth=5, num_heads=8, mlp_ratio=2.0,
         drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=0.0,
-        lora={"enabled": False},
+        lora={"enabled": with_lora, "rank": lora_rank, "alpha": 16, "dropout": 0.05,
+              "target_modules": ["qkv", "proj"]},
     )
     model = DSTformer(cfg)
     model.load_pretrained(weights_path)
@@ -160,12 +166,16 @@ def main():
     p.add_argument("--seq_len", type=int, default=243)
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--output_json", default=None)
+    p.add_argument("--lora", action="store_true",
+                   help="Apply LoRA before loading (use for our trained best.pt).")
+    p.add_argument("--lora_rank", type=int, default=8)
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    print(f"Loading MotionBERT weights: {args.weights}")
-    model = build_model(args.weights, args.seq_len, device)
+    print(f"Loading weights: {args.weights}  (lora={args.lora})")
+    model = build_model(args.weights, args.seq_len, device,
+                        with_lora=args.lora, lora_rank=args.lora_rank)
     print(f"Params: {sum(x.numel() for x in model.parameters()):,}")
 
     loaders = {
