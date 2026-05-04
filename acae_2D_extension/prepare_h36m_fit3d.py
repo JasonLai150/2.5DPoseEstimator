@@ -10,8 +10,9 @@ Produces:
   acae_data/h36m_joint_indices.npy — int indices into unified skeleton for
                                       H36M's 17 joints (in H36M order)
 
-The unified skeleton is the union of H36M-17 and Fit3D BODY_25, with
-duplicate joints merged. Joint names follow the ACAE l/r/center convention.
+The unified skeleton is the union of H36M-17 and the 25-joint Fit3D ordering.
+The first 17 Fit3D joints match the H36M-style body layout; the remaining
+eight joints are preserved as extra Fit3D-specific joints.
 """
 
 import json
@@ -45,44 +46,25 @@ H36M_NAMES_17 = [
     'rwrist',       # 16
 ]
 
-# OpenPose BODY_25 used by Fit3D joints3d_25
-BODY25_NAMES = [
-    'nose',         # 0
-    'neck',         # 1
-    'rshoulder',    # 2
-    'relbow',       # 3
-    'rwrist',       # 4
-    'lshoulder',    # 5
-    'lelbow',       # 6
-    'lwrist',       # 7
-    'pelvis',       # 8   (MidHip)
-    'rhip',         # 9
-    'rknee',        # 10
-    'rankle',       # 11
-    'lhip',         # 12
-    'lknee',        # 13
-    'lankle',       # 14
-    'reye',         # 15
-    'leye',         # 16
-    'rear',         # 17
-    'lear',         # 18
-    'lbigtoe',      # 19
-    'lsmalltoe',    # 20
-    'lheel',        # 21
-    'rbigtoe',      # 22
-    'rsmalltoe',    # 23
-    'rheel',        # 24
+FIT3D_EXTRA_NAMES_8 = [
+    'fit3d_extra_0',
+    'fit3d_extra_1',
+    'fit3d_extra_2',
+    'fit3d_extra_3',
+    'fit3d_extra_4',
+    'fit3d_extra_5',
+    'fit3d_extra_6',
+    'fit3d_extra_7',
 ]
 
 
 def build_unified_skeleton():
     """
-    Merge H36M-17 and BODY_25 into a unified skeleton.
-    Returns (unified_names, h36m_to_unified, body25_to_unified).
+    Merge H36M-17 and the 25-joint Fit3D ordering into a unified skeleton.
+    Returns (unified_names, h36m_to_unified, fit3d_to_unified).
 
     h36m_to_unified[i]  = index in unified skeleton for H36M joint i
-    body25_to_unified[i] = index in unified skeleton for BODY25 joint i
-                           (or -1 if the joint is dropped)
+    fit3d_to_unified[i] = index in unified skeleton for Fit3D joint i
     """
     # Start with all 17 H36M joints (these are the ones VDP3D uses)
     unified = list(H36M_NAMES_17)
@@ -90,16 +72,17 @@ def build_unified_skeleton():
     # Map H36M → unified (trivially identity since H36M comes first)
     h36m_to_unified = list(range(17))
 
-    # Build BODY25 → unified, adding new joints as needed
-    body25_to_unified = []
-    for i, name in enumerate(BODY25_NAMES):
+    # Build Fit3D → unified, preserving the archive ordering.
+    fit3d_names = list(H36M_NAMES_17) + list(FIT3D_EXTRA_NAMES_8)
+    fit3d_to_unified = []
+    for i, name in enumerate(fit3d_names):
         if name in unified:
-            body25_to_unified.append(unified.index(name))
+            fit3d_to_unified.append(unified.index(name))
         else:
-            body25_to_unified.append(len(unified))
+            fit3d_to_unified.append(len(unified))
             unified.append(name)
 
-    return unified, h36m_to_unified, body25_to_unified
+    return unified, h36m_to_unified, fit3d_to_unified
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -193,12 +176,12 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Build unified skeleton
-    unified_names, h36m_to_unified, body25_to_unified = build_unified_skeleton()
+    unified_names, h36m_to_unified, fit3d_to_unified = build_unified_skeleton()
     J_unified = len(unified_names)
     print(f'Unified skeleton: {J_unified} joints')
     print(f'  Names: {unified_names}')
     print(f'  H36M→unified mapping: {h36m_to_unified}')
-    print(f'  BODY25→unified mapping: {body25_to_unified}')
+    print(f'  Fit3D→unified mapping: {fit3d_to_unified}')
 
     # ── Load H36M ────────────────────────────────────────────────────────
     h36m_seqs = load_h36m_3d(args.h36m_path)
@@ -226,9 +209,8 @@ def main():
         seq_sub = seq[::args.sample_stride]
         for frame in seq_sub:
             unified_pose = np.full((J_unified, 3), np.nan, dtype=np.float32)
-            for b_idx, u_idx in enumerate(body25_to_unified):
-                if u_idx >= 0:
-                    unified_pose[u_idx] = frame[b_idx] * 1000.0  # meters → mm
+            for fit3d_idx, u_idx in enumerate(fit3d_to_unified):
+                unified_pose[u_idx] = frame[fit3d_idx] * 1000.0  # meters → mm
             all_poses.append(unified_pose)
 
     n_fit3d = len(all_poses) - n_h36m

@@ -20,6 +20,10 @@ import os
 import sys
 import argparse
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -165,6 +169,7 @@ def train_aligned_acae(
     n_latent_sided=12, n_latent_center=5,
     batch_size=64, regul_lambda=0.6, align_lambda=1.0,
     training_epochs=30, device='cpu', checkpoint_dir='acae_data',
+    run_name: str | None = None,
 ):
     """
     Train ACAE with 17-joint latent space aligned to H36M.
@@ -305,7 +310,12 @@ def train_aligned_acae(
     w1, w2 = permute_weights(w1, w2, inv_permutation)
 
     # ── Save ─────────────────────────────────────────────────────────────
-    np.savez(os.path.join(checkpoint_dir, 'result.npz'), w1=w1, w2=w2)
+    prefix = f'{run_name}_' if run_name else ''
+    result_name = f'{prefix}result.npz' if run_name else 'result.npz'
+    checkpoint_name = f'{prefix}checkpoint.pth' if run_name else 'acae_aligned_checkpoint.pth'
+    csv_name = f'{prefix}losses.csv' if run_name else 'losses.csv'
+
+    np.savez(os.path.join(checkpoint_dir, result_name), w1=w1, w2=w2)
 
     torch.save({
         'model_state_dict': model.state_dict(),
@@ -325,16 +335,16 @@ def train_aligned_acae(
         'h36m_joint_indices': h36m_joint_indices.tolist(),
         'w1': w1,
         'w2': w2,
-    }, os.path.join(checkpoint_dir, 'acae_aligned_checkpoint.pth'))
+    }, os.path.join(checkpoint_dir, checkpoint_name))
 
-    csv_path = os.path.join(checkpoint_dir, 'losses.csv')
+    csv_path = os.path.join(checkpoint_dir, csv_name)
     with open(csv_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=list(log_rows[0].keys()))
         writer.writeheader()
         writer.writerows(log_rows)
 
-    print(f'\nSaved: {checkpoint_dir}/result.npz  (w1={w1.shape}, w2={w2.shape})')
-    print(f'Saved: {checkpoint_dir}/acae_aligned_checkpoint.pth')
+    print(f'\nSaved: {os.path.join(checkpoint_dir, result_name)}  (w1={w1.shape}, w2={w2.shape})')
+    print(f'Saved: {os.path.join(checkpoint_dir, checkpoint_name)}')
     return w1, w2, model
 
 
@@ -352,6 +362,8 @@ def main():
                         help='Weight for H36M alignment loss')
     parser.add_argument('--regul-lambda', type=float, default=0.6,
                         help='Weight for L1 weight regularization')
+    parser.add_argument('--run-name', default=None,
+                        help='Optional prefix for saved checkpoint/result/loss files')
     args = parser.parse_args()
 
     if args.device == 'auto':
@@ -395,6 +407,7 @@ def main():
         training_epochs=args.epochs,
         device=device,
         checkpoint_dir=args.checkpoint_dir,
+        run_name=args.run_name,
     )
 
 

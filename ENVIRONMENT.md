@@ -18,16 +18,9 @@ This repo compares the native VideoPose3D baseline, the ACAE-wrapped model, and 
 ## Environments
 
 Work from the repo root:
-
-```sh
-cd /home/hice1/acheng324/scratch/2.5DPoseEstimator
 ```
 
-The ViTPose extraction workflow uses a dedicated Conda env at:
-
-```sh
-/home/hice1/acheng324/scratch/conda_envs/vitpose
-```
+The ViTPose extraction workflow uses a dedicated Conda env,
 
 Create it with:
 

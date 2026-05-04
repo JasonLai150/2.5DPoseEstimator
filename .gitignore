@@ -26,6 +26,7 @@ ENV/
 
 # Checkpoints and logs
 /checkpoint/
+/artifacts/
 /artifacts/checkpoints/
 /artifacts/logs/
 /acae_data/checkpoints/
