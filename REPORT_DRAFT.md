@@ -18,7 +18,7 @@ Robust 3D human pose estimation in *unconstrained* domains is a long-standing bo
 
 **Who benefits.** Coaches building automated form-checking apps, physical therapists tracking range-of-motion, and AR/VR users in fitness applications all need 3D pose for poses (pushups, deadlifts, burpees) that lab datasets do not contain. Our finding is that LoRA-based hybrid fine-tuning provides such adaptation at low cost (LoRA = 0.29% trainable parameters), while a knowledge-distillation regularizer turns the cross-domain trade-off into a single tunable scalar.
 
-**Headline result.** Our best configuration reduces Fit3D-test raw MPJPE from 299 mm (MotionBERT zero-shot) to 242 mm (–19.2%) using only 122,880 LoRA-adapter parameters trained for 15 epochs on a single L40S/H100 GPU. The accompanying ablation traces a clean Pareto frontier from "max Fit3D adaptation" to "max H36M preservation" controlled by a single KD weight.
+**Headline result.** Our best configuration reduces Fit3D-test raw MPJPE from 299 mm (MotionBERT zero-shot) to 242 mm (–19.2%) using only 122,880 LoRA-adapter parameters trained for 15 epochs on a single L40S/H100 GPU. The accompanying ablation traces a clean Pareto frontier from "max Fit3D adaptation" to "max H36M preservation" controlled by a single KD weight. **(See teaser figure: `figures/fig_pareto.png`.)**
 
 ---
 
@@ -64,7 +64,7 @@ We propose three testable hypotheses about the 2.5D hybrid training regime:
 
 ### 3.2 Architecture
 
-The backbone is **DSTformer** (Zhu et al., 2023), a 5-block dual-stream spatio-temporal transformer with embedding dim 512, MLP ratio 2.0, and 8 attention heads per block. Each block contains a parallel spatial-then-temporal (ST) and temporal-then-spatial (TS) stream fused via a learned per-block attention. We initialize with the official `MB_ft_h36m.bin` weights (mirrored at huggingface.co/walterzhu/MotionBERT). The model has 42.5 M parameters.
+**See `figures/fig_architecture.png`** for the training pipeline overview. The backbone is **DSTformer** (Zhu et al., 2023), a 5-block dual-stream spatio-temporal transformer with embedding dim 512, MLP ratio 2.0, and 8 attention heads per block. Each block contains a parallel spatial-then-temporal (ST) and temporal-then-spatial (TS) stream fused via a learned per-block attention. We initialize with the official `MB_ft_h36m.bin` weights (mirrored at huggingface.co/walterzhu/MotionBERT). The model has 42.5 M parameters.
 
 We attach **LoRA adapters** (Hu et al., 2021) to the `qkv` and `proj` linear layers in every attention block of every dual-stream block. With rank $r$, this introduces $r \cdot d_{in} + r \cdot d_{out}$ new parameters per linear layer. At rank 2 this gives 122,880 trainable parameters (0.29% of the total); rank 8 gives 491,520 (1.14%). All non-LoRA parameters are frozen.
 
@@ -141,6 +141,8 @@ Table 2 reports our two reproduced baselines on both H36M test and Fit3D-s11.
 
 ### 5.2 Ablation Sweep
 
+**See `figures/fig_ablation.png`** for a visual comparison of all methods on Fit3D MPJPE / P-MPJPE; **`figures/fig_trajectories.png`** for per-epoch validation curves across the four key runs.
+
 **Table 3.** v3+v4 ablation results. All runs init MB_ft_h36m, 15 epochs, AdamW lr=$10^{-4}$, batch 16. λ defaults: $\lambda_{3D} = 1.0,\, \lambda_{reproj} = 0.5,\, \lambda_{biomech} = 1.0,\, \lambda_{kd} = 0$. Run-specific changes in *italics*.
 
 | Run | H36M MPJPE | H36M P-MPJPE | **Fit3D MPJPE** | **Fit3D P-MPJPE** | Fit3D BLI |
@@ -166,7 +168,7 @@ Table 2 reports our two reproduced baselines on both H36M test and Fit3D-s11.
 
 ### 5.4 Per-Action Analysis
 
-We extracted per-action P-MPJPE for the headline run (v4 + KD λ=1) on the 47 Fit3D actions. The eight hardest (P-MPJPE > 220 mm) are all floor-based, inverted, or heavily-occluded poses: pushup (264), burpees (255), diamond_pushup (254), warmup_1 (254), mule_kick (233), man_maker (229), warmup_5 (224), warmup_19 (218). The eight easiest (< 130 mm) are all standing dumbbell exercises closely matching H36M's representational distribution: dumbbell_overhead_shoulder_press (105), warmup_6 (122), dumbbell_curl_trifecta (122), neutral_overhead_shoulder_press (124). The domain gap is **strongly correlated with deviation from H36M's standing/sitting body-orientation distribution** — a finding that motivates targeted data collection for the failure regime.
+**See `figures/fig_per_action.png`** for the full bar chart of all 47 actions, color-coded by exercise category. We extracted per-action P-MPJPE for the headline run (v4 + KD λ=1) on the 47 Fit3D actions. The eight hardest (P-MPJPE > 220 mm) are all floor-based, inverted, or heavily-occluded poses: pushup (264), burpees (255), diamond_pushup (254), warmup_1 (254), mule_kick (233), man_maker (229), warmup_5 (224), warmup_19 (218). The eight easiest (< 130 mm) are all standing dumbbell exercises closely matching H36M's representational distribution: dumbbell_overhead_shoulder_press (105), warmup_6 (122), dumbbell_curl_trifecta (122), neutral_overhead_shoulder_press (124). The domain gap is **strongly correlated with deviation from H36M's standing/sitting body-orientation distribution** — a finding that motivates targeted data collection for the failure regime.
 
 ### 5.5 Failure Modes and Diagnostic Findings
 
@@ -192,9 +194,9 @@ We presented a 2.5D hybrid fine-tuning framework for cross-domain 3D pose estima
 
 | Member | Contributions |
 |---|---|
-| Candice Chen | Skeleton-bridging autoencoder (independent training and joint-naming validation), milestone autoencoder figures, related-work / methodology drafting in milestone and final report. |
-| Alec Cheng | VideoPose3D baseline training and milestone evaluation, 2D gym-video pipeline integration in milestone, milestone result tables. |
-| Jason Lai | DSTformer / LoRA / composite-loss implementation, MotionBERT-weight integration and key-mapping debugging, IMAR coordinate-convention fix in `process_fit3d.py`, full v3+v4 ablation sweep (no-H36M, low-LR, rank-2, biomech×2, KD λ ∈ {1,10,100,1000}), reprojection-loss v2 wiring with absolute pelvis recovery, evaluation pipeline (BLI + per-action breakdown), final-report results / experiments / discussion. |
+| Candice Chen | TBD |
+| Alec Cheng | TBD |
+| Jason Lai | TBD |
 
 ---
 
