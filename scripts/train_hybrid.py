@@ -106,6 +106,12 @@ def main():
                     help="Override loss weight for 2D reprojection (default 0.5).")
     ap.add_argument("--lambda_biomech", type=float, default=None,
                     help="Override loss weight for biomechanical constraints (default 1.0).")
+    ap.add_argument("--lambda_kd", type=float, default=0.0,
+                    help="Knowledge-distillation weight: lambda_kd * MSE(student, teacher) "
+                         "on H36M-supervised samples. teacher is a frozen MB_ft_h36m model "
+                         "(no LoRA). 0 disables KD entirely.")
+    ap.add_argument("--kd_weights", default="checkpoints/motionbert/pose3d/MB_ft_h36m.bin",
+                    help="Pretrained weights for the frozen teacher.")
     ap.add_argument("--run_name", default=None,
                     help="Subdir under outputs/checkpoints/ for this run's checkpoints. "
                          "Defaults to v1_hybrid_<timestamp> so multiple runs don't overwrite.")
@@ -134,6 +140,7 @@ def main():
         cfg.training.loss_weights.reproj = args.lambda_reproj
     if args.lambda_biomech is not None:
         cfg.training.loss_weights.biomech = args.lambda_biomech
+    cfg.training.loss_weights.kd = args.lambda_kd
 
     # Disable W&B for batch jobs that don't have wandb auth set up
     cfg.wandb.mode = "disabled"
@@ -157,7 +164,8 @@ def main():
     print(f"  epochs/lr:      {cfg.training.epochs} / {cfg.training.optimizer.lr}")
     print(f"  loss weights:   l3d={cfg.training.loss_weights.l3d} "
           f"reproj={cfg.training.loss_weights.reproj} "
-          f"biomech={cfg.training.loss_weights.biomech}")
+          f"biomech={cfg.training.loss_weights.biomech} "
+          f"kd={cfg.training.loss_weights.kd}")
     print("=" * 60)
 
     train_loader, val_loader = build_loaders(cfg, smoke=args.smoke)
@@ -165,7 +173,23 @@ def main():
     model = create_model(cfg)
     print(f"Trainable params: {model.count_parameters():,} of {model.count_parameters(trainable_only=False):,}")
 
-    trainer = Trainer(cfg=cfg, model=model, train_loader=train_loader, val_loader=val_loader)
+    # Optional frozen teacher for KD
+    teacher = None
+    if args.lambda_kd > 0:
+        from copy import deepcopy
+        from src.config import Config
+        # Build a teacher cfg = student cfg with LoRA disabled and the KD weights
+        teacher_cfg = Config({
+            **{k: v for k, v in dict(cfg).items() if k != "model"},
+            "model": Config({**dict(cfg.model), "pretrained_path": args.kd_weights}),
+        })
+        teacher_cfg.model.lora = Config({**dict(cfg.model.lora), "enabled": False})
+        teacher = create_model(teacher_cfg)
+        print(f"KD enabled: teacher loaded from {args.kd_weights} "
+              f"({teacher.count_parameters(trainable_only=False):,} frozen params)")
+
+    trainer = Trainer(cfg=cfg, model=model, train_loader=train_loader, val_loader=val_loader,
+                      teacher=teacher)
     trainer.train()
 
 

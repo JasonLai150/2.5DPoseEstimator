@@ -214,6 +214,9 @@ class PoseLoss(nn.Module):
         self.lambda_3d = cfg.training.loss_weights.l3d
         self.lambda_reproj = cfg.training.loss_weights.reproj
         self.lambda_biomech = cfg.training.loss_weights.biomech
+        # Knowledge-distillation weight (optional). If 0, KD path is skipped
+        # even when teacher_pred is provided.
+        self.lambda_kd = cfg.training.loss_weights.get("kd", 0.0)
 
         # Biomechanical weights
         self.symmetry_weight = cfg.training.biomech.symmetry_weight
@@ -230,6 +233,7 @@ class PoseLoss(nn.Module):
         self,
         pred_3d: torch.Tensor,
         batch: dict,
+        teacher_pred: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Compute composite loss.
@@ -291,6 +295,28 @@ class PoseLoss(nn.Module):
                 l_reproj = torch.abs(proj_2d - batch["poses_2d"][weak]).sum(-1).mean()
                 losses["reproj"] = l_reproj
                 total_loss = total_loss + self.lambda_reproj * l_reproj
+
+        # Knowledge distillation — pulls predictions toward a frozen teacher
+        # (typically MB_ft_h36m) on H36M-supervised samples. Unlike biomech,
+        # KD does NOT converge to ~0; it stays active throughout training,
+        # so it durably preserves H36M priors that biomech cannot.
+        if (
+            teacher_pred is not None
+            and self.lambda_kd > 0
+            and has_3d is not None
+        ):
+            if torch.is_tensor(has_3d):
+                sup = has_3d.bool()
+                if sup.any():
+                    diff = pred_3d[sup] - teacher_pred[sup]
+                    l_kd = (diff * diff).mean()
+                    losses["kd"] = l_kd
+                    total_loss = total_loss + self.lambda_kd * l_kd
+            elif has_3d:
+                diff = pred_3d - teacher_pred
+                l_kd = (diff * diff).mean()
+                losses["kd"] = l_kd
+                total_loss = total_loss + self.lambda_kd * l_kd
 
         # Biomechanical constraints (always applied)
         l_symmetry = bilateral_symmetry_loss(pred_3d, self.skeleton)

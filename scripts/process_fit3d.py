@@ -77,10 +77,15 @@ def coco25_to_h36m17(poses: np.ndarray) -> np.ndarray:
     out = np.zeros((*poses.shape[:-2], 17, 3), dtype=poses.dtype)
     for h36m_idx, coco_idx in COCO25_TO_H36M17.items():
         out[..., h36m_idx, :] = poses[..., coco_idx, :]
-    # Thorax (H36M joint 8): shoulder midpoint of IMAR's left (14) and right (11) shoulders
-    out[..., 8, :] = (poses[..., 11, :] + poses[..., 14, :]) / 2.0
-    # Spine (H36M joint 7): midpoint of pelvis and the new thorax
-    out[..., 7, :] = (poses[..., 0, :] + out[..., 8, :]) / 2.0
+    # Thorax (H36M joint 8) and spine (joint 7): ratio-based interpolation
+    # along the pelvis -> IMAR-neck axis, using H36M's anatomical proportions.
+    # H36M training data avg bone lengths: pelvis->spine=254mm, spine->thorax=250mm,
+    # thorax->neck=111mm. Total pelvis->neck=615mm. Spine sits at 254/615=0.41,
+    # thorax at (254+250)/615=0.82. Anchor on IMAR[8]=neck (well-defined).
+    pelvis = poses[..., 0, :]
+    neck   = poses[..., 8, :]
+    out[..., 7, :] = pelvis + 0.41 * (neck - pelvis)   # spine
+    out[..., 8, :] = pelvis + 0.82 * (neck - pelvis)   # thorax
     return out
 
 

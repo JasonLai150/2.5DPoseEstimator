@@ -34,6 +34,7 @@ class Trainer:
         train_loader: DataLoader | None = None,
         val_loader: DataLoader | None = None,
         test_loader: DataLoader | None = None,
+        teacher: PoseEstimatorBase | None = None,
     ):
         self.cfg = cfg
         self.model = model
@@ -44,6 +45,15 @@ class Trainer:
         # Device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
+
+        # Optional frozen teacher for knowledge distillation. When provided,
+        # _train_epoch runs it under no_grad each batch and passes the
+        # prediction to PoseLoss.
+        self.teacher = teacher
+        if self.teacher is not None:
+            self.teacher.to(self.device).eval()
+            for p in self.teacher.parameters():
+                p.requires_grad = False
 
         # Loss
         self.criterion = PoseLoss(cfg)
@@ -181,8 +191,14 @@ class Trainer:
             self.optimizer.zero_grad()
             pred_3d = self.model(batch["poses_2d"], batch.get("mask"))
 
+            # Frozen-teacher prediction for KD (no_grad, no LoRA in teacher)
+            teacher_pred = None
+            if self.teacher is not None:
+                with torch.no_grad():
+                    teacher_pred = self.teacher(batch["poses_2d"], batch.get("mask"))
+
             # Loss
-            losses = self.criterion(pred_3d, batch)
+            losses = self.criterion(pred_3d, batch, teacher_pred=teacher_pred)
 
             # Backward
             losses["loss"].backward()
