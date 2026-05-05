@@ -243,8 +243,8 @@ def fig_trajectories():
 
 # ---- Figure 5: Architecture diagram (matplotlib blocks) ----
 def fig_arch():
-    fig, ax = plt.subplots(figsize=(9.0, 4.5))
-    ax.set_xlim(0, 14); ax.set_ylim(0, 8); ax.axis("off")
+    fig, ax = plt.subplots(figsize=(11.0, 5.0))
+    ax.set_xlim(0, 17); ax.set_ylim(0, 8); ax.axis("off")
 
     def box(x, y, w, h, text, fc="#cce5ff", ec="black", fontsize=9, weight="normal"):
         rect = plt.Rectangle((x, y), w, h, facecolor=fc, edgecolor=ec, linewidth=1.2)
@@ -257,40 +257,42 @@ def fig_arch():
                     arrowprops=dict(arrowstyle="->", color=color, lw=1.2))
 
     # Inputs
-    box(0.2, 6.0, 2.6, 1.2, "H36M\n2D + 3D",  fc="#fff4e6")
-    box(0.2, 4.2, 2.6, 1.2, "Fit3D-train\n2D + cam_root\n+ intrinsics", fc="#fff4e6")
+    box(0.2, 6.0, 3.0, 1.2, "H36M\n2D + 3D",  fc="#fff4e6")
+    box(0.2, 4.2, 3.0, 1.2, "Fit3D-train\n2D + cam_root\n+ intrinsics", fc="#fff4e6")
 
-    # Mixed batch
-    box(3.4, 5.1, 2.4, 1.2, "Mixed batch\nhas_3d / has_reproj\nflags", fc="#e6f7ff")
-    arrow(2.8, 6.6, 3.4, 5.85)
-    arrow(2.8, 4.8, 3.4, 5.55)
+    # Mixed batch (wider, shorter text)
+    box(3.6, 5.1, 3.6, 1.2,
+        "Mixed batch\nhas_3d / has_reproj flags",
+        fc="#e6f7ff", fontsize=8.5)
+    arrow(3.2, 6.6, 3.6, 5.85)
+    arrow(3.2, 4.8, 3.6, 5.55)
 
     # Student model
-    box(6.4, 5.1, 3.2, 2.2,
+    box(7.6, 5.1, 3.6, 2.2,
         "DSTformer\n(MB_ft_h36m init,\nfrozen backbone)\n+ LoRA rank 2",
         fc="#cce5ff", weight="bold")
-    arrow(5.8, 5.7, 6.4, 6.2)
+    arrow(7.2, 5.7, 7.6, 6.2)
 
-    # Teacher
-    box(6.4, 2.4, 3.2, 1.4,
-        "Teacher: same DSTformer\n(frozen, no LoRA)",
-        fc="#f0f0f0")
-    arrow(5.0, 5.1, 6.4, 3.4, color="gray")
+    # Teacher (shortened text)
+    box(7.6, 2.4, 3.6, 1.4,
+        "Teacher DSTformer\n(frozen, no LoRA)",
+        fc="#f0f0f0", fontsize=9)
+    arrow(5.4, 5.1, 7.6, 3.4, color="gray")
 
     # Predictions
-    box(10.4, 6.0, 3.2, 1.2, "ŷ_student", fc="#d4f4dd")
-    arrow(9.6, 6.5, 10.4, 6.6)
-    box(10.4, 2.7, 3.2, 1.0, "ŷ_teacher (no_grad)", fc="#dddddd")
-    arrow(9.6, 3.1, 10.4, 3.2, color="gray")
+    box(11.6, 6.0, 3.4, 1.2, "ŷ_student", fc="#d4f4dd")
+    arrow(11.2, 6.5, 11.6, 6.6)
+    box(11.6, 2.4, 3.4, 1.0, "ŷ_teacher (no_grad)", fc="#dddddd")
+    arrow(11.2, 3.1, 11.6, 2.9, color="gray")
 
-    # Loss
-    box(10.4, 4.0, 3.2, 1.5,
-        "L_total =\nλ_3D · L_3D\n+ λ_rep · L_reproj\n+ λ_bm · L_biomech\n+ λ_kd · L_kd",
+    # Loss (4 lines, comfortable spacing)
+    box(11.6, 4.0, 3.4, 1.5,
+        "L_total = λ_3D L_3D\n+ λ_rep L_reproj\n+ λ_bm L_biomech\n+ λ_kd L_kd",
         fc="#fff5cc", fontsize=8.5)
-    arrow(12.0, 5.95, 12.0, 5.5)
-    arrow(12.0, 3.7, 12.0, 4.0, color="gray")
+    arrow(13.3, 5.95, 13.3, 5.55)
+    arrow(13.3, 3.4, 13.3, 4.0, color="gray")
 
-    ax.text(7, 7.7, "Hybrid 2.5D Training Pipeline", ha="center",
+    ax.text(8.5, 7.7, "Hybrid 2.5D Training Pipeline", ha="center",
             fontsize=13, fontweight="bold")
     ax.text(0.2, 0.5,
             "Notes: L_3D and L_kd gated to has_3d=True samples.  "
