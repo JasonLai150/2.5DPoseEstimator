@@ -54,6 +54,15 @@ COCO_TO_UNIFIED = {
 }
 
 
+BLI_BONE_PAIRS = [
+    ("lhip", "lknee", "rhip", "rknee"),
+    ("lknee", "lankle", "rknee", "rankle"),
+    ("lshoulder", "lelbow", "rshoulder", "relbow"),
+    ("lelbow", "lwrist", "relbow", "rwrist"),
+    ("lhip", "lshoulder", "rhip", "rshoulder"),
+]
+
+
 def iter_tar_members(tf: tarfile.TarFile) -> Iterable[tarfile.TarInfo]:
     while True:
         try:
@@ -314,12 +323,90 @@ def load_model(checkpoint_path: Path, acae_checkpoint: Path, device: torch.devic
     return model
 
 
+def procrustes_mpjpe_mm(pred: np.ndarray, target: np.ndarray) -> Tuple[float, int]:
+    """Protocol #2 error with per-frame rigid alignment over valid target joints."""
+    total_error = 0.0
+    total_joints = 0
+    for pred_frame, target_frame in zip(pred, target):
+        valid = np.abs(target_frame).sum(axis=-1) > 1e-5
+        if valid.sum() < 3:
+            continue
+
+        predicted = pred_frame[valid].astype(np.float64)
+        gt = target_frame[valid].astype(np.float64)
+
+        mu_x = gt.mean(axis=0, keepdims=True)
+        mu_y = predicted.mean(axis=0, keepdims=True)
+        x0 = gt - mu_x
+        y0 = predicted - mu_y
+
+        norm_x = np.linalg.norm(x0)
+        norm_y = np.linalg.norm(y0)
+        if norm_x < 1e-8 or norm_y < 1e-8:
+            continue
+
+        x0 /= norm_x
+        y0 /= norm_y
+
+        h = x0.T @ y0
+        u, s, vt = np.linalg.svd(h)
+        v = vt.T
+        r = v @ u.T
+        if np.linalg.det(r) < 0:
+            v[:, -1] *= -1
+            s[-1] *= -1
+            r = v @ u.T
+
+        scale = s.sum() * norm_x / norm_y
+        translation = mu_x - scale * (mu_y @ r)
+        aligned = scale * (predicted @ r) + translation
+
+        total_error += float(np.linalg.norm(aligned - gt, axis=-1).sum())
+        total_joints += int(valid.sum())
+
+    if total_joints == 0:
+        return float("inf"), 0
+    return total_error / total_joints * 1000.0, total_joints
+
+
+def bli_mm(pred: np.ndarray, target: np.ndarray, joint_names: Sequence[str]) -> Tuple[float, int]:
+    """Bilateral length inconsistency: mean abs(left bone - right bone)."""
+    name_to_idx = {name: idx for idx, name in enumerate(joint_names)}
+    total_error = 0.0
+    total_pairs = 0
+
+    for left_a, left_b, right_a, right_b in BLI_BONE_PAIRS:
+        if not all(name in name_to_idx for name in (left_a, left_b, right_a, right_b)):
+            continue
+        idx = [name_to_idx[name] for name in (left_a, left_b, right_a, right_b)]
+        valid = (np.abs(target[:, idx, :]).sum(axis=-1) > 1e-5).all(axis=-1)
+        if not valid.any():
+            continue
+        left_len = np.linalg.norm(pred[valid, idx[0], :] - pred[valid, idx[1], :], axis=-1)
+        right_len = np.linalg.norm(pred[valid, idx[2], :] - pred[valid, idx[3], :], axis=-1)
+        total_error += float(np.abs(left_len - right_len).sum())
+        total_pairs += int(valid.sum())
+
+    if total_pairs == 0:
+        return float("inf"), 0
+    return total_error / total_pairs * 1000.0, total_pairs
+
+
 @torch.no_grad()
-def evaluate(model: BridgedTemporalModel, sequences: Sequence[Tuple[np.ndarray, np.ndarray]], device: torch.device) -> Dict[str, float]:
+def evaluate(
+    model: BridgedTemporalModel,
+    sequences: Sequence[Tuple[np.ndarray, np.ndarray]],
+    device: torch.device,
+    joint_names: Sequence[str],
+) -> Dict[str, float]:
     model.eval()
     pad = (model.receptive_field() - 1) // 2
     total_error = 0.0
     total_joints = 0.0
+    total_p_mpjpe = 0.0
+    total_p_joints = 0
+    total_bli = 0.0
+    total_bli_pairs = 0
     total_sequences = 0
 
     for pos2d, pos3d in sequences:
@@ -332,23 +419,57 @@ def evaluate(model: BridgedTemporalModel, sequences: Sequence[Tuple[np.ndarray, 
         error = torch.linalg.norm(pred - targets_3d, dim=-1)
         total_error += float(error[valid].sum().item())
         total_joints += float(valid.sum().item())
+
+        pred_np = pred.squeeze(0).cpu().numpy()
+        target_np = targets_3d.squeeze(0).cpu().numpy()
+        p_mpjpe, p_count = procrustes_mpjpe_mm(pred_np, target_np)
+        if p_count > 0:
+            total_p_mpjpe += p_mpjpe * p_count
+            total_p_joints += p_count
+        bli, bli_count = bli_mm(pred_np, target_np, joint_names)
+        if bli_count > 0:
+            total_bli += bli * bli_count
+            total_bli_pairs += bli_count
         total_sequences += 1
 
     mpjpe = total_error / total_joints if total_joints > 0 else float("inf")
-    return {"mpjpe": mpjpe, "mpjpe_mm": mpjpe * 1000.0, "sequences": float(total_sequences), "joints": total_joints}
+    p_mpjpe_mm = total_p_mpjpe / total_p_joints if total_p_joints > 0 else float("inf")
+    bli_metric = total_bli / total_bli_pairs if total_bli_pairs > 0 else float("inf")
+    return {
+        "mpjpe": mpjpe,
+        "mpjpe_mm": mpjpe * 1000.0,
+        "p_mpjpe_mm": p_mpjpe_mm,
+        "bli_mm": bli_metric,
+        "sequences": float(total_sequences),
+        "joints": total_joints,
+    }
 
 
-def evaluate_h36m(model: BridgedTemporalModel, sequences: Sequence[Tuple[np.ndarray, np.ndarray]], device: torch.device) -> Dict[str, float]:
-    return evaluate(model, sequences, device)
+def evaluate_h36m(
+    model: BridgedTemporalModel,
+    sequences: Sequence[Tuple[np.ndarray, np.ndarray]],
+    device: torch.device,
+    joint_names: Sequence[str],
+) -> Dict[str, float]:
+    return evaluate(model, sequences, device, joint_names)
 
 
 @torch.no_grad()
-def evaluate_h36m_native_vdp3d(model: BridgedTemporalModel, sequences: Sequence[Tuple[np.ndarray, np.ndarray]], device: torch.device) -> Dict[str, float]:
+def evaluate_h36m_native_vdp3d(
+    model: BridgedTemporalModel,
+    sequences: Sequence[Tuple[np.ndarray, np.ndarray]],
+    device: torch.device,
+    joint_names: Sequence[str],
+) -> Dict[str, float]:
     """Evaluate the 17-joint VideoPose3D core without ACAE encode/decode."""
     model.vdp3d.eval()
     pad = (model.receptive_field() - 1) // 2
     total_error = 0.0
     total_joints = 0.0
+    total_p_mpjpe = 0.0
+    total_p_joints = 0
+    total_bli = 0.0
+    total_bli_pairs = 0
     total_sequences = 0
 
     for pos2d, pos3d in sequences:
@@ -361,10 +482,30 @@ def evaluate_h36m_native_vdp3d(model: BridgedTemporalModel, sequences: Sequence[
         error = torch.linalg.norm(pred - targets_3d, dim=-1)
         total_error += float(error[valid].sum().item())
         total_joints += float(valid.sum().item())
+
+        pred_np = pred.squeeze(0).cpu().numpy()
+        target_np = targets_3d.squeeze(0).cpu().numpy()
+        p_mpjpe, p_count = procrustes_mpjpe_mm(pred_np, target_np)
+        if p_count > 0:
+            total_p_mpjpe += p_mpjpe * p_count
+            total_p_joints += p_count
+        bli, bli_count = bli_mm(pred_np, target_np, joint_names)
+        if bli_count > 0:
+            total_bli += bli * bli_count
+            total_bli_pairs += bli_count
         total_sequences += 1
 
     mpjpe = total_error / total_joints if total_joints > 0 else float("inf")
-    return {"mpjpe": mpjpe, "mpjpe_mm": mpjpe * 1000.0, "sequences": float(total_sequences), "joints": total_joints}
+    p_mpjpe_mm = total_p_mpjpe / total_p_joints if total_p_joints > 0 else float("inf")
+    bli_metric = total_bli / total_bli_pairs if total_bli_pairs > 0 else float("inf")
+    return {
+        "mpjpe": mpjpe,
+        "mpjpe_mm": mpjpe * 1000.0,
+        "p_mpjpe_mm": p_mpjpe_mm,
+        "bli_mm": bli_metric,
+        "sequences": float(total_sequences),
+        "joints": total_joints,
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -408,7 +549,7 @@ def main() -> None:
     model = load_model(checkpoint, acae_checkpoint, device)
     if not args.skip_fit3d:
         targets, camera_params = load_fit3d_targets_and_cameras(args.fit3d_path)
-        sequences, stats, _joint_names = build_eval_sequences(
+        sequences, stats, joint_names = build_eval_sequences(
             args.fit3d_2d_dir,
             targets,
             camera_params,
@@ -425,27 +566,34 @@ def main() -> None:
         if not sequences:
             raise RuntimeError("No Fit3D ViTPose sequences matched 3D targets.")
 
-        metrics = evaluate(model, sequences, device)
+        metrics = evaluate(model, sequences, device, joint_names)
         print("==========================================", flush=True)
         print(f"Evaluated Fit3D sequences: {int(metrics['sequences'])}", flush=True)
         print(f"Fit3D ViTPose MPJPE: {metrics['mpjpe_mm']:.2f} mm", flush=True)
+        print(f"Fit3D ViTPose P-MPJPE: {metrics['p_mpjpe_mm']:.2f} mm", flush=True)
+        print(f"Fit3D ViTPose BLI: {metrics['bli_mm']:.2f} mm", flush=True)
         print("Dataset: Fit3D", flush=True)
         print("2D input: real ViTPose detector output", flush=True)
         print("Model: H36M-trained VideoPose3D + frozen ACAE bridge", flush=True)
         print("==========================================", flush=True)
 
     if not args.skip_h36m:
-        bridged, native, _ = load_h36m_inputs(args.h36m_3d, args.h36m_2d, parse_subjects(args.h36m_subjects), args.sample_stride)
+        bridged, native, joint_names = load_h36m_inputs(args.h36m_3d, args.h36m_2d, parse_subjects(args.h36m_subjects), args.sample_stride)
         print(f"H36M bridged sequences: {len(bridged)}", flush=True)
         print(f"H36M native sequences: {len(native)}", flush=True)
         if not bridged or not native:
             raise RuntimeError("No H36M evaluation sequences could be built.")
 
-        h36m_bridged = evaluate_h36m(model, bridged, device)
-        h36m_native = evaluate_h36m_native_vdp3d(model, native, device)
+        h36m_native_joint_names = joint_names[:17]
+        h36m_bridged = evaluate_h36m(model, bridged, device, joint_names)
+        h36m_native = evaluate_h36m_native_vdp3d(model, native, device, h36m_native_joint_names)
         print("==========================================", flush=True)
         print(f"H36M bridged MPJPE: {h36m_bridged['mpjpe_mm']:.2f} mm", flush=True)
+        print(f"H36M bridged P-MPJPE: {h36m_bridged['p_mpjpe_mm']:.2f} mm", flush=True)
+        print(f"H36M bridged BLI: {h36m_bridged['bli_mm']:.2f} mm", flush=True)
         print(f"H36M native MPJPE: {h36m_native['mpjpe_mm']:.2f} mm", flush=True)
+        print(f"H36M native P-MPJPE: {h36m_native['p_mpjpe_mm']:.2f} mm", flush=True)
+        print(f"H36M native BLI: {h36m_native['bli_mm']:.2f} mm", flush=True)
         print("Dataset: H36M", flush=True)
         print("Bridged input: unified 28-joint H36M 2D", flush=True)
         print("Native input: 17-joint H36M 2D through VideoPose3D core only", flush=True)
