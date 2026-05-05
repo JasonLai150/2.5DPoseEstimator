@@ -72,7 +72,7 @@ python scripts/train.py --resume_from outputs/checkpoints/best.pt
 
 ## Final report
 
-See `team_report.tex` / `team_report.md` for the full writeup, hypotheses (H1–H3), ablations, per-action analysis, and discussion.
+See `CS7643_Final_Report.pdf` for the full writeup, hypotheses (H1–H3), ablations, per-action analysis, and discussion.
 
 ## Acknowledgments
 
