@@ -1,3 +1,6 @@
+# ViTPose + ACAE + VidPose3D
+This branch contains the logic to train a pipeline to generalize pose estimation from any unseen target-dataset. This is forked from the VidPose3D Repo, clones Srandi's Affine-Combining Autoencoder repo, and also requires that you import ViTPose weights.
+
 # 3D human pose estimation in video with temporal convolutions and semi-supervised training
 <p align="center"><img src="images/convolutions_anim.gif" width="50%" alt="" /></p>
 
